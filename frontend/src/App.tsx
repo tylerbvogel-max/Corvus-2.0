@@ -204,6 +204,13 @@ export default function App() {
             ))}
           </nav>
         )}
+        {/* Project info — always visible, even when collapsed */}
+        {!collapsed && (
+          <div className="sidebar-info-area" style={{ padding: '8px 12px', fontSize: '11px', color: 'var(--text-muted, #888)', borderTop: '1px solid var(--border, #333)', marginTop: 'auto' }}>
+            <div style={{ marginBottom: 2, opacity: 0.7 }}>Running at <strong>http://localhost:8002</strong></div>
+            <div style={{ fontFamily: 'monospace', fontSize: '10px', opacity: 0.5, userSelect: 'all', cursor: 'text' }}>~/Projects/corvus</div>
+          </div>
+        )}
         {/* Settings gear — always visible, even when collapsed */}
         <div className="sidebar-settings-area">
           <button
