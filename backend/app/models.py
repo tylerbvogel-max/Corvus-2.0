@@ -1,0 +1,490 @@
+import datetime
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Neuron(Base):
+    __tablename__ = "neurons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True, index=True)
+    layer: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    node_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    role_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    invocations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    avg_utility: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    cross_ref_departments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    standard_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at_query_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    # Authoritative source fields
+    source_type: Mapped[str] = mapped_column(String(20), default="operational", server_default="operational")
+    source_origin: Mapped[str] = mapped_column(String(20), default="seed", server_default="seed")
+    citation: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    effective_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    last_verified: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    superseded_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    source_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    external_references: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    # Semantic embedding (384-dim vector, JSON-encoded float array)
+    embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Denormalized from highest-authority linked source document
+    authority_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    parent: Mapped["Neuron | None"] = relationship("Neuron", remote_side=[id], foreign_keys=[parent_id], lazy="selectin")
+    firings: Mapped[list["NeuronFiring"]] = relationship("NeuronFiring", back_populates="neuron", lazy="select")
+
+
+class NeuronFiring(Base):
+    __tablename__ = "neuron_firings"
+    __table_args__ = (
+        Index("ix_neuron_firings_neuron_offset", "neuron_id", "global_query_offset"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False, index=True)
+    query_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("queries.id"), nullable=True, index=True)
+    context_type: Mapped[str] = mapped_column(String(50), default="direct")
+    outcome: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    global_token_offset: Mapped[int] = mapped_column(Integer, default=0)
+    global_query_offset: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    neuron: Mapped["Neuron"] = relationship("Neuron", back_populates="firings")
+
+
+class NeuronEdge(Base):
+    __tablename__ = "neuron_edges"
+
+    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), primary_key=True)
+    target_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), primary_key=True)
+    co_fire_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    weight: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+    last_updated_query: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Typed edges: "stellate" (intra-department, local) or "pyramidal" (cross-department, long-range)
+    edge_type: Mapped[str | None] = mapped_column(String(20), nullable=True, server_default="pyramidal")
+    # Provenance: "organic" (real query firing), "bootstrap" (pre-seeded prior), "concept_seed" (concept linking)
+    source: Mapped[str | None] = mapped_column(String(20), nullable=True, server_default="organic")
+    # When this edge was last modified (by any source)
+    last_adjusted: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, server_default=func.now())
+    # Short text explaining WHY two neurons are linked
+    context: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class SourceDocument(Base):
+    __tablename__ = "source_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    canonical_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)  # e.g., "AS9100D", "FAR 31.205"
+    family: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # e.g., "FAR", "AS", "MIL-STD"
+    version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")  # active/superseded/draft/withdrawn
+    authority_level: Mapped[str] = mapped_column(String(30), nullable=False)  # binding_standard / regulatory / industry_practice / organizational / informational
+    issuing_body: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    effective_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    superseded_by_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("source_documents.id"), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class NeuronSourceLink(Base):
+    __tablename__ = "neuron_source_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False, index=True)
+    source_document_id: Mapped[int] = mapped_column(Integer, ForeignKey("source_documents.id"), nullable=False, index=True)
+    derivation_type: Mapped[str] = mapped_column(String(30), nullable=False, default="references", server_default="references")  # derived_from / references / implements / constrained_by
+    section_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)  # specific clause, e.g., "31.205-6(b)"
+    review_status: Mapped[str] = mapped_column(String(20), nullable=False, default="current", server_default="current")  # current / stale / broken
+    flagged_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    link_origin: Mapped[str] = mapped_column(String(20), nullable=False, default="auto_detected", server_default="auto_detected")  # auto_detected / ingest / manual
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class InhibitoryRegulator(Base):
+    """GABAergic interneuron analogue — monitors regional activation density and suppresses over-firing."""
+    __tablename__ = "inhibitory_regulators"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    region_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "department" | "role_key"
+    region_value: Mapped[str] = mapped_column(String(100), nullable=False)
+    inhibition_strength: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    activation_threshold: Mapped[int] = mapped_column(Integer, default=15, server_default="15")
+    max_survivors: Mapped[int] = mapped_column(Integer, default=8, server_default="8")
+    redundancy_cosine_threshold: Mapped[float] = mapped_column(Float, default=0.92, server_default="0.92")
+    total_suppressions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    total_activations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    avg_post_suppression_utility: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Query(Base):
+    __tablename__ = "queries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    user_message: Mapped[str] = mapped_column(Text, nullable=False)
+    classified_intent: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    classified_departments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classified_role_keys: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classified_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
+    selected_neuron_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assembled_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opus_response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opus_input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    opus_output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    run_neuron: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    run_opus: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    results_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of slot results
+    eval_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    eval_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    eval_input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    eval_output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    user_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classify_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    classify_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    execute_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    execute_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    refine_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    neuron_scores_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    model_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class SystemState(Base):
+    __tablename__ = "system_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    global_token_counter: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_consolidation_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    total_queries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class IntentNeuronMap(Base):
+    __tablename__ = "intent_neuron_map"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    intent_label: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    avg_score: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+
+
+class EvalScore(Base):
+    __tablename__ = "eval_scores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    query_id: Mapped[int] = mapped_column(Integer, ForeignKey("queries.id"), nullable=False, index=True)
+    eval_model: Mapped[str] = mapped_column(String(50), nullable=False)
+    answer_mode: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. "haiku_neuron"
+    answer_label: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. "A"
+    accuracy: Mapped[int] = mapped_column(Integer, nullable=False)      # 1-5
+    completeness: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
+    clarity: Mapped[int] = mapped_column(Integer, nullable=False)       # 1-5
+    faithfulness: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5 (5 = no hallucinations)
+    overall: Mapped[int] = mapped_column(Integer, nullable=False)       # 1-5
+    verdict: Mapped[str | None] = mapped_column(Text, nullable=True)    # free-text verdict
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class NeuronRefinement(Base):
+    __tablename__ = "neuron_refinements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    query_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("queries.id"), nullable=True, index=True)
+    neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)  # "update" | "create"
+    field: Mapped[str | None] = mapped_column(String(50), nullable=True)  # for updates: content/summary/label/is_active
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class AutopilotConfig(Base):
+    __tablename__ = "autopilot_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    directive: Mapped[str] = mapped_column(Text, default="", server_default="")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    focus_neuron_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    max_layer: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    eval_model: Mapped[str] = mapped_column(String(20), default="haiku", server_default="haiku")
+    last_tick_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AutopilotRun(Base):
+    __tablename__ = "autopilot_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    query_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("queries.id"), nullable=True)
+    generated_query: Mapped[str] = mapped_column(Text, nullable=False)
+    directive: Mapped[str] = mapped_column(Text, nullable=False)
+    focus_neuron_label: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gap_source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # emergent_queue|low_eval|thin_neuron|sparse_subtree|directive
+    gap_target: Mapped[str | None] = mapped_column(Text, nullable=True)  # Human-readable gap description
+    neurons_activated: Mapped[int] = mapped_column(Integer, default=0)
+    updates_applied: Mapped[int] = mapped_column(Integer, default=0)
+    neurons_created: Mapped[int] = mapped_column(Integer, default=0)
+    eval_overall: Mapped[int] = mapped_column(Integer, default=3)
+    eval_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refine_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(20), default="completed")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class PropagationLog(Base):
+    __tablename__ = "propagation_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    query_id: Mapped[int] = mapped_column(Integer, ForeignKey("queries.id"), nullable=False)
+    source_neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False)
+    target_neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False)
+    activation_value: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class SystemAlert(Base):
+    __tablename__ = "system_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    alert_type: Mapped[str] = mapped_column(String(50), nullable=False)  # "drift" | "quality_drop" | "api_change" | "circuit_breaker"
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)    # "info" | "warning" | "critical"
+    signal: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    acknowledged_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class EmergentQueue(Base):
+    __tablename__ = "emergent_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    citation_pattern: Mapped[str] = mapped_column(String(200), nullable=False)
+    domain: Mapped[str] = mapped_column(String(20), nullable=False)  # "regulatory" or "technical"
+    family: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    detection_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    first_detected_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    last_detected_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    detected_in_neuron_ids: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    detected_in_query_ids: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    resolved_neuron_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    resolved_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ObservationQueue(Base):
+    """Corvus observation ingestion queue — observations awaiting review or already processed."""
+    __tablename__ = "observation_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="corvus")
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False, default="anonymous")
+    observation_type: Mapped[str] = mapped_column(String(30), nullable=False)  # decision|process|entity|pattern|digest
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    entities_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    app_context: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    project_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    proposed_department: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    proposed_role_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    proposed_layer: Mapped[int] = mapped_column(Integer, default=3)
+    similar_neuron_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", server_default="queued")  # queued|evaluated|approved|rejected|duplicate
+    created_neuron_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    eval_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    eval_model: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    eval_input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    eval_output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ProjectProfile(Base):
+    __tablename__ = "project_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_path: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    project_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    neuron_relevance: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")  # JSON: {neuron_id: cumulative_score}
+    query_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_query_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class BatchJob(Base):
+    __tablename__ = "batch_jobs"
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)  # short uuid
+    status: Mapped[str] = mapped_column(String(20), default="running", server_default="running")  # running|done|cancelled|interrupted|error
+    step: Mapped[str] = mapped_column(String(200), default="Starting...")
+    total_chunks: Mapped[int] = mapped_column(Integer, default=0)
+    current_chunk: Mapped[int] = mapped_column(Integer, default=0)
+    proposals_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")  # JSON array
+    errors_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")  # JSON array
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    citation: Mapped[str] = mapped_column(String(200), default="")
+    source_type: Mapped[str] = mapped_column(String(50), default="regulatory_primary")
+    department: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    role_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parent_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    queue_entry_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_chars: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String(20), default="haiku")
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    effective_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    chunks_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of chunk texts for resume
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)  # stored for resume
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ManagementReview(Base):
+    __tablename__ = "management_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_type: Mapped[str] = mapped_column(String(50), nullable=False)  # pii_audit | scoring_health | governance_review | incident_review | compliance_audit | neuron_expansion | model_change
+    reviewer: Mapped[str] = mapped_column(String(200), nullable=False)
+    review_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    findings: Mapped[str] = mapped_column(Text, nullable=False)
+    decisions: Mapped[str] = mapped_column(Text, nullable=False)
+    action_items: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")  # JSON array: [{description, due_date, completed}]
+    status: Mapped[str] = mapped_column(String(20), default="completed", server_default="completed")  # completed | action_required | escalated
+    compliance_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ComplianceSnapshot(Base):
+    __tablename__ = "compliance_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    snapshot_data: Mapped[str] = mapped_column(Text, nullable=False)  # Full JSON of compliance-audit response
+    pii_clean: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    coverage_cv: Mapped[float] = mapped_column(Float, nullable=False)
+    fairness_pass: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    missing_citations_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    stale_neurons_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_neurons: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_evals: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(30), default="manual", server_default="manual")  # manual | scheduled | pre_expansion
+    diff_summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON diff vs previous snapshot
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class EvidenceMapping(Base):
+    __tablename__ = "evidence_mappings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    framework: Mapped[str] = mapped_column(String(30), nullable=False)  # nist_ai_rmf | aiuc_1 | iso_42001
+    requirement_id: Mapped[str] = mapped_column(String(30), nullable=False)
+    requirement_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="gap", server_default="gap")  # addressed | partial | gap | not_applicable
+    evidence_type: Mapped[str] = mapped_column(String(20), nullable=False)  # endpoint | table | document | review_log | code
+    evidence_location: Mapped[str] = mapped_column(String(500), nullable=False)
+    verification_query: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_verified: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    last_verified_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class AuditLog(Base):
+    """Immutable audit trail for all state-changing API actions.
+
+    Addresses: NIST 800-53 AU-2/AU-3/AU-4/AU-8/AU-12, CMMC 3.3.1/3.3.5/3.3.6,
+    SOC 2 CC7.2/CC7.3, FedRAMP AU family.
+    """
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    action: Mapped[str] = mapped_column(String(10), nullable=False)  # POST, PUT, DELETE, PATCH
+    endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)  # IPv4 or IPv6
+    request_body_summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # Truncated, no secrets
+    response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    archived_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    messages: Mapped[list["ChatSessionMessage"]] = relationship(
+        "ChatSessionMessage", back_populates="session", lazy="selectin",
+        order_by="ChatSessionMessage.created_at",
+    )
+
+
+class ChatSessionMessage(Base):
+    __tablename__ = "chat_session_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cost: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+    neurons_activated: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    neuron_scores_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    session: Mapped["ChatSession"] = relationship("ChatSession", back_populates="messages")

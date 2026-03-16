@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "corvus": {
+      "type": "stdio",
+      "command": "/home/tylerbvogel/Projects/corvus/backend/venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "/home/tylerbvogel/Projects/corvus/backend"
+    }
+  }
+}
