@@ -236,6 +236,7 @@ def _build_neuron_hits(neurons: list, score_map: dict[int, dict]) -> list[Neuron
         hits.append(NeuronHit(
             neuron_id=neuron.id, label=neuron.label, layer=neuron.layer,
             department=neuron.department,
+            parent_id=neuron.parent_id, summary=neuron.summary,
             combined=s.get("combined", 0), burst=s.get("burst", 0),
             impact=s.get("impact", 0), precision=s.get("precision", 0),
             novelty=s.get("novelty", 0), recency=s.get("recency", 0),

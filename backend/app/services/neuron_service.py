@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Neuron, NeuronEdge, NeuronFiring, SystemState
-from app.services.scoring_engine import compute_score, NeuronScoreBreakdown
+from app.services.scoring_engine import compute_score, calc_relevance, calc_hybrid_relevance, NeuronScoreBreakdown
 
 
 @dataclass
@@ -242,6 +242,7 @@ def _score_single_candidate(
     semantic_map: dict[int, float],
     classified_departments: list[str] | None,
     classified_role_keys: list[str] | None,
+    hybrid_map: dict[int, float] | None = None,
 ) -> NeuronScoreBreakdown:
     """Compute score breakdown for a single candidate neuron."""
     fires_in_window = burst_map.get(neuron.id, 0)
@@ -257,6 +258,7 @@ def _score_single_candidate(
     dept_match = bool(classified_departments and neuron.department in classified_departments)
     role_match = bool(classified_role_keys and neuron.role_key in classified_role_keys)
 
+    hybrid_score = hybrid_map.get(neuron.id) if hybrid_map else None
     score = compute_score(
         fires_in_window=fires_in_window,
         avg_utility=neuron.avg_utility,
@@ -270,6 +272,7 @@ def _score_single_candidate(
         dept_match=dept_match,
         role_match=role_match,
         semantic_similarity=semantic_map.get(neuron.id),
+        hybrid_score=hybrid_score,
     )
     assert score.combined >= 0, f"Score for neuron {neuron.id} is negative: {score.combined}"
     return score
@@ -308,12 +311,23 @@ async def score_candidates(
         db, candidate_ids, query_embedding, precomputed_similarities,
     )
 
+    # Hybrid RRF: fuse keyword + semantic scores when both are available
+    hybrid_map: dict[int, float] | None = None
+    if settings.hybrid_relevance_enabled and semantic_map and keywords:
+        keyword_scores: dict[int, float] = {}
+        for neuron in candidates:
+            content = getattr(neuron, 'content', None) or ''
+            neuron_text = f"{neuron.label} {neuron.summary or ''} {content}"
+            keyword_scores[neuron.id] = calc_relevance(keywords, neuron_text)
+        hybrid_map = calc_hybrid_relevance(keyword_scores, semantic_map, k=settings.rrf_k)
+
     scores = [
         _score_single_candidate(
             neuron, total_queries, keywords,
             burst_map, neuron_fires_map, dept_total_map,
             last_offset_map, semantic_map,
             classified_departments, classified_role_keys,
+            hybrid_map,
         )
         for neuron in candidates
     ]
@@ -690,6 +704,113 @@ async def apply_diversity_floor(
     result_list.sort(key=lambda s: s.combined, reverse=True)
 
     return result_list
+
+
+async def _load_neuron_meta_cached(
+    db: AsyncSession,
+    nid: int,
+    cache: dict[int, dict],
+) -> dict | None:
+    """Load a single neuron's parent/meta, with cache."""
+    if nid in cache:
+        return cache[nid]
+    row = await db.execute(
+        select(Neuron.id, Neuron.parent_id, Neuron.label, Neuron.department,
+               Neuron.layer, Neuron.summary)
+        .where(Neuron.id == nid)
+    )
+    r = row.one_or_none()
+    if r is None:
+        return None
+    meta = {
+        "parent_id": r[1], "label": r[2], "department": r[3],
+        "layer": r[4], "summary": r[5],
+    }
+    cache[nid] = meta
+    return meta
+
+
+async def _walk_ancestor_chain(
+    neuron_id: int,
+    selected_ids: set[int],
+    cache: dict[int, dict],
+    db: AsyncSession,
+) -> list[int]:
+    """Walk up parent_id chain, stopping at root or an already-selected node."""
+    max_depth = 8
+    chain: list[int] = [neuron_id]
+    current_id = neuron_id
+    for _ in range(max_depth):
+        meta = await _load_neuron_meta_cached(db, current_id, cache)
+        if meta is None:
+            break
+        pid = meta["parent_id"]
+        if pid is None or pid in selected_ids:
+            break
+        chain.append(pid)
+        current_id = pid
+    return chain
+
+
+async def select_with_hierarchy(
+    db: AsyncSession,
+    scored: list[NeuronScoreBreakdown],
+    budget: int,
+) -> list[NeuronScoreBreakdown]:
+    """Select neurons with complete ancestor chains for tree-structured activation.
+
+    Instead of a flat top-K slice, picks the highest-scoring neurons and
+    includes their full parent chains up to the root. This produces deep,
+    narrow trees instead of a star pattern where everything connects to prompt.
+    """
+    assert budget > 0, f"budget must be positive, got {budget}"
+    if not scored:
+        return []
+
+    score_by_id: dict[int, NeuronScoreBreakdown] = {s.neuron_id: s for s in scored}
+
+    # Pre-load parent_id and metadata for all scored neurons in one batch
+    scored_ids = [s.neuron_id for s in scored]
+    result = await db.execute(
+        select(Neuron.id, Neuron.parent_id, Neuron.label, Neuron.department,
+               Neuron.layer, Neuron.summary)
+        .where(Neuron.id.in_(scored_ids))
+    )
+    cache: dict[int, dict] = {}
+    for nid, pid, label, dept, layer, summary in result.all():
+        cache[nid] = {
+            "parent_id": pid, "label": label, "department": dept,
+            "layer": layer, "summary": summary,
+        }
+
+    selected_ids: set[int] = set()
+    selected: list[NeuronScoreBreakdown] = []
+
+    for s in scored:
+        if s.neuron_id in selected_ids:
+            continue
+        chain_ids = await _walk_ancestor_chain(s.neuron_id, selected_ids, cache, db)
+        new_ids = [nid for nid in chain_ids if nid not in selected_ids]
+        if not new_ids:
+            continue
+        if len(selected_ids) + len(new_ids) > budget:
+            if len(selected_ids) + 2 > budget:
+                break
+            new_ids = new_ids[:budget - len(selected_ids)]
+
+        for nid in new_ids:
+            selected_ids.add(nid)
+            if nid in score_by_id:
+                selected.append(score_by_id[nid])
+            else:
+                selected.append(NeuronScoreBreakdown(
+                    neuron_id=nid, burst=0.0, impact=0.0, precision=0.0,
+                    novelty=0.0, recency=0.0, relevance=0.0,
+                    combined=0.0, spread_boost=0.0,
+                ))
+
+    selected.sort(key=lambda s: s.combined, reverse=True)
+    return selected
 
 
 async def record_firing(

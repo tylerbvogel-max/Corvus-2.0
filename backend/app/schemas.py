@@ -196,6 +196,8 @@ class NeuronHit(BaseModel):
     label: str
     layer: int
     department: str | None
+    parent_id: int | None = None
+    summary: str | None = None
     combined: float
     burst: float
     impact: float

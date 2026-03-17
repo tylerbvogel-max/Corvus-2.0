@@ -149,6 +149,8 @@ export interface NeuronHit {
   label: string;
   layer: number;
   department: string | null;
+  parent_id: number | null;
+  summary: string | null;
   combined: number;
   burst: number;
   impact: number;

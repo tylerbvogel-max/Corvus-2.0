@@ -25,6 +25,7 @@ from app.services.neuron_service import (
     spread_activation,
     record_firing,
     apply_diversity_floor,
+    select_with_hierarchy,
 )
 from app.services.prompt_assembler import assemble_prompt
 from app.services.propagation import propagate_activation
@@ -230,7 +231,10 @@ async def prepare_context(
     all_scored, effective_top_k = await _apply_inhibition_and_boost(
         db, scored, effective_top_k, project_path,
     )
-    top_slice = all_scored[:effective_top_k]
+    if settings.hierarchy_selection_enabled:
+        top_slice = await select_with_hierarchy(db, all_scored, effective_top_k)
+    else:
+        top_slice = all_scored[:effective_top_k]
     neuron_map = await _load_neuron_map(db, [s.neuron_id for s in top_slice])
 
     # Load prior neuron context for conversation continuity in prompt assembly

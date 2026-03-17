@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     semantic_prefilter_enabled: bool = True
     semantic_prefilter_top_n: int = 250
     semantic_prefilter_min_similarity: float = 0.10
+    # Hybrid search: fuse keyword + semantic relevance via Reciprocal Rank Fusion
+    hybrid_relevance_enabled: bool = True
+    rrf_k: int = 60
+    # Impact analysis blast radius (graph traversal)
+    impact_max_hops: int = 3
+    impact_min_edge_weight: float = 0.15
+    impact_seed_count: int = 5
     # Inhibitory regulation (replaces diversity floor)
     inhibition_enabled: bool = True
     inhibition_default_threshold: int = 15
@@ -62,6 +69,8 @@ class Settings(BaseSettings):
     spread_instantiate_decay: float = 0.6
     spread_instantiate_min_weight: float = 0.10
     concept_activation_boost: float = 1.3
+    # Hierarchy-aware selection: include ancestor chains so graph shows trees
+    hierarchy_selection_enabled: bool = True
     # Per-project neuron subgraph caching
     project_cache_enabled: bool = True
     project_cache_boost_max: float = 1.3

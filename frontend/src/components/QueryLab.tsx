@@ -1487,7 +1487,7 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
             impact: h.impact, precision: h.precision, novelty: h.novelty,
             recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost,
             label: h.label, department: h.department, layer: h.layer,
-            parent_id: null, summary: null,
+            parent_id: h.parent_id, summary: h.summary,
           }))} onNavigateToNeuron={onNavigateToNeuron} />
         </Section>
       )}

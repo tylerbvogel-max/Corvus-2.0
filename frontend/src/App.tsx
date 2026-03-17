@@ -30,8 +30,9 @@ import ComplianceDashboard from './components/ComplianceDashboard'
 import HomePage from './components/HomePage'
 import EndUserStrategyPage from './components/EndUserStrategyPage'
 import SystemUseBanner from './components/SystemUseBanner'
+import SigmaGraphPage from './components/SigmaGraphPage'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'monetization' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'end-user-strategy';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'monetization' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'end-user-strategy';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -47,6 +48,7 @@ interface NavItem {
   key: Tab;
   label: string;
   className?: string;
+  labelColor?: string;
 }
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -71,6 +73,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { key: 'graph', label: 'Graph' },
       { key: 'universe', label: '3D Universe' },
       { key: 'dashboard', label: 'Dashboard' },
+      { key: 'sigma-graph', label: 'Sigma Graph', labelColor: '#ef4444' },
       { key: 'cofiring', label: 'Co-Firing' },
       { key: 'layer-heatmap', label: 'Layer Heatmap' },
     ],
@@ -195,7 +198,7 @@ export default function App() {
                         className={`sidebar-item${tab === item.key ? ' active' : ''}${item.className ? ' ' + item.className : ''}`}
                         onClick={() => setTab(item.key)}
                       >
-                        {item.label}
+                        {item.labelColor ? <span style={{ color: item.labelColor }}>{item.label}</span> : item.label}
                       </button>
                     ))}
                   </div>
@@ -260,6 +263,7 @@ export default function App() {
         {tab === 'explorer' && <Explorer navigateToNeuronId={explorerNeuronId} onNavigateHandled={() => setExplorerNeuronId(null)} />}
         {tab === 'graph' && <CirclePacking />}
         {tab === 'universe' && <NeuronUniverse />}
+        {tab === 'sigma-graph' && <SigmaGraphPage />}
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'cofiring' && (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 16 }}>
