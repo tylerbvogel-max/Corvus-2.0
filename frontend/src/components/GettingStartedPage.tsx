@@ -117,8 +117,8 @@ function SetupGuide() {
         <h3>Installation</h3>
 
         <StepCard number={1} title="Clone the repository">
-          <CodeBlock>{`git clone https://github.com/tylerbvogel-max/corvus.git
-cd corvus`}</CodeBlock>
+          <CodeBlock>{`git clone https://github.com/tylerbvogel-max/Corvus-2.0.git
+cd Corvus-2.0`}</CodeBlock>
         </StepCard>
 
         <StepCard number={2} title="Set up PostgreSQL">
@@ -156,7 +156,7 @@ uvicorn app.main:app --port 8002 --reload`}</CodeBlock>
           <ul style={{ margin: '4px 0 0 16px', lineHeight: 1.8 }}>
             <li>Create all tables in the PostgreSQL database</li>
             <li>Run schema migrations</li>
-            <li>Seed the neuron graph (2,031 neurons across 9 departments, 51 roles, 6 layers)</li>
+            <li>Seed the neuron graph (~2,000+ neurons across 10 departments, 55+ roles, 6 layers)</li>
             <li>Load regulatory reference patterns (~150 neurons)</li>
           </ul>
         </StepCard>
@@ -245,7 +245,7 @@ claude
         <CodeBlock>{`# Health check
 curl http://localhost:8002/health
 
-# Check neuron count (should be ~2,031)
+# Check neuron count (should be ~2,000+)
 curl http://localhost:8002/neurons/stats | python3 -m json.tool
 
 # Run test suite
@@ -270,7 +270,7 @@ cd backend && pytest tests/ -v`}</CodeBlock>
 │   │   │   └── performance.py   # Analytics & statistical tests
 │   │   ├── services/
 │   │   │   ├── classifier.py    # Haiku intent classification
-│   │   │   ├── scoring_engine.py # 5-signal neuron scoring
+│   │   │   ├── scoring_engine.py # 6-signal gated neuron scoring
 │   │   │   ├── prompt_assembler.py # Top-K token-budget packing
 │   │   │   ├── executor.py      # Multi-slot execution + prepare_context()
 │   │   │   ├── neuron_service.py # Neuron helpers + tree walking
@@ -618,8 +618,8 @@ function TrainingWalkthrough() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12, marginTop: 12 }}>
           {[
             { term: 'Neuron', desc: 'A unit of domain knowledge. Each neuron has a label, content, department, and role. Organized in a 6-layer hierarchy: Department > Role > Task > System > Decision > Output.' },
-            { term: 'Firing', desc: 'When a neuron is selected for a query\'s context window. Firing history drives all 5 scoring signals.' },
-            { term: '5-Signal Scoring', desc: 'Each neuron is scored by Burst (recent activity), Impact (user feedback), Precision (department relevance), Novelty (age), and Recency (last fired). Combined score determines selection.' },
+            { term: 'Firing', desc: 'When a neuron is selected for a query\'s context window. Firing history drives all 6 scoring signals.' },
+            { term: '6-Signal Gated Scoring', desc: 'Each neuron is scored by a Relevance stimulus gate (semantic + keyword match) that enables 5 modulatory signals: Burst (recent activity), Impact (user feedback), Precision (department relevance), Novelty (age), and Recency (last fired).' },
             { term: 'Spread Activation', desc: 'Neurons that frequently fire together build co-firing edges. When one fires, its neighbors get a score boost — emergent knowledge pathways.' },
             { term: 'Prompt Assembly', desc: 'Top-K scored neurons are packed into a token-budgeted system prompt, then sent to the LLM alongside your question.' },
             { term: 'Autopilot', desc: 'Autonomous gap-driven training loop. Detects coverage holes, generates queries, and proposes neuron refinements.' },
@@ -660,7 +660,7 @@ aerospace components under ITAR regulations?`}</CodeBlock>
           <p>The result panel shows:</p>
           <ul style={{ margin: '4px 0 0 16px', lineHeight: 1.8 }}>
             <li><strong>Classification</strong> — The detected intent, departments, roles, and keywords</li>
-            <li><strong>Scored neurons</strong> — Which neurons were selected and their 5-signal breakdown</li>
+            <li><strong>Scored neurons</strong> — Which neurons were selected and their scoring signal breakdown</li>
             <li><strong>Assembled prompt</strong> — The full system prompt sent to the LLM (expandable)</li>
             <li><strong>Response</strong> — The LLM's answer, grounded in your domain knowledge</li>
           </ul>
@@ -707,7 +707,7 @@ aerospace components under ITAR regulations?`}</CodeBlock>
           </p>
           <ul style={{ margin: '4px 0 0 16px', lineHeight: 1.8 }}>
             <li><strong>Content</strong> — The knowledge text assembled into prompts</li>
-            <li><strong>Scores</strong> — Current 5-signal values with visual bars</li>
+            <li><strong>Scores</strong> — Current scoring signal values with visual bars</li>
             <li><strong>Ego Graph</strong> — Co-firing neighbors visualized as a force-directed network</li>
             <li><strong>Firing History</strong> — When this neuron was last activated</li>
           </ul>

@@ -19,7 +19,7 @@ export default function MethodologicalRisks() {
       mechanism:
         'Over time, the system converges on a narrow "comfort zone" — performing well on common query patterns while silently failing on edge cases it never selects neurons for. Novelty decays fast and doesn\'t fully counter this. The risk is a graph that looks healthy by its own metrics but has developed blind spots shaped by query distribution.',
       mitigation:
-        'Semantic prefilter (built) provides candidate selection independent of firing history — cosine similarity against all 2,054 neuron embeddings doesn\'t care whether a neuron has been popular. Inhibitory regulation (built) prevents regional density from monopolizing context. Periodic "cold neuron audit" to surface high-content neurons with zero or near-zero firings.',
+        'Semantic prefilter (built) provides candidate selection independent of firing history — cosine similarity against all 2,180+ neuron embeddings doesn\'t care whether a neuron has been popular. Inhibitory regulation (built) prevents regional density from monopolizing context. Periodic "cold neuron audit" to surface high-content neurons with zero or near-zero firings.',
       status: 'Partially mitigated — semantic prefilter + inhibitory regulation reduce but don\'t eliminate the loop',
     },
     {
@@ -71,7 +71,7 @@ export default function MethodologicalRisks() {
       mechanism:
         'Cross-ref departments are a patch, not a solution. The fundamental assumption that org structure is a good ontology for knowledge retrieval is unproven and may introduce systematic retrieval failures for cross-cutting topics. Knowledge that spans departments is structurally disadvantaged because it can only inherit one parent\'s classification boost.',
       mitigation:
-        'Semantic prefilter (built) eliminates org-chart walls entirely for candidate selection — embedding similarity has no department boundaries. Cross-department pyramidal edges with proven co-firing propagate activation across departments. Inhibitory regulation preserves cross-department representation via Martinotti cell floor guarantee. Community detection (Phase 5) would discover emergent groupings.',
+        'Semantic prefilter (built) eliminates org-chart walls entirely for candidate selection — embedding similarity has no department boundaries. Cross-department pyramidal edges with proven co-firing propagate activation across departments. Inhibitory regulation preserves cross-department representation via Martinotti cell floor guarantee. Community detection via Leiden clustering (built) discovers emergent groupings crossing the fixed hierarchy.',
       status: 'Substantially mitigated — semantic prefilter ignores org hierarchy; pyramidal edges + inhibitory floor preserve cross-dept coverage',
     },
     {
@@ -198,7 +198,7 @@ export default function MethodologicalRisks() {
           The strongest countermeasure &mdash; a scoring path independent of usage history &mdash; is now
           partially implemented via the semantic prefilter. Candidate selection by embedding similarity
           is fully independent of firing history and co-firing patterns. However, spread activation
-          still amplifies query-shaped associations. Community detection (Phase 5) would provide a
+          still amplifies query-shaped associations. Community detection via Leiden clustering (built) provides a
           structural countermeasure at the graph level.
         </p>
       </div>

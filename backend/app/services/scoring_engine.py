@@ -111,11 +111,54 @@ def calc_relevance(keywords: list[str], neuron_text: str) -> float:
     return result
 
 
+def calc_hybrid_relevance(
+    keyword_scores: dict[int, float],
+    semantic_scores: dict[int, float],
+    k: int = 60,
+) -> dict[int, float]:
+    """Fuse keyword and semantic relevance via Reciprocal Rank Fusion (RRF).
+
+    RRF score = 1/(k + keyword_rank) + 1/(k + semantic_rank), normalized to [0, 1].
+    Neurons appearing in only one list receive half-weight from that list alone.
+    """
+    assert k > 0, f"RRF k must be positive, got {k}"
+    all_ids = set(keyword_scores) | set(semantic_scores)
+    if not all_ids:
+        return {}
+
+    # Rank each list (1-based, sorted descending by score)
+    kw_ranked = {nid: rank for rank, (nid, _) in enumerate(
+        sorted(keyword_scores.items(), key=lambda x: x[1], reverse=True), start=1
+    )}
+    sem_ranked = {nid: rank for rank, (nid, _) in enumerate(
+        sorted(semantic_scores.items(), key=lambda x: x[1], reverse=True), start=1
+    )}
+
+    # Default rank for missing entries: len + 1 (worst rank)
+    default_kw_rank = len(kw_ranked) + 1
+    default_sem_rank = len(sem_ranked) + 1
+
+    raw: dict[int, float] = {}
+    for nid in all_ids:
+        kw_rank = kw_ranked.get(nid, default_kw_rank)
+        sem_rank = sem_ranked.get(nid, default_sem_rank)
+        raw[nid] = 1.0 / (k + kw_rank) + 1.0 / (k + sem_rank)
+
+    # Normalize to [0, 1]
+    max_score = max(raw.values()) if raw else 1.0
+    assert max_score > 0, "max RRF score must be positive"
+    return {nid: score / max_score for nid, score in raw.items()}
+
+
 def _resolve_relevance(
     semantic_similarity: float | None,
     keywords: list[str],
     neuron_text: str,
+    hybrid_score: float | None = None,
 ) -> float:
+    """Resolve relevance from hybrid RRF score, semantic similarity, or keyword match."""
+    if hybrid_score is not None:
+        return max(0.0, min(1.0, hybrid_score))
     if semantic_similarity is not None:
         return max(0.0, min(1.0, semantic_similarity))
     return calc_relevance(keywords, neuron_text)
@@ -178,6 +221,7 @@ def compute_score(
     dept_match: bool = False,
     role_match: bool = False,
     semantic_similarity: float | None = None,
+    hybrid_score: float | None = None,
 ) -> NeuronScoreBreakdown:
     """Compute combined activation score using gated modulatory scoring.
 
@@ -204,7 +248,7 @@ def compute_score(
     assert 0.0 <= novelty <= 1.0, f"novelty out of range: {novelty}"
     assert 0.0 <= recency <= 1.0, f"recency out of range: {recency}"
 
-    relevance = _resolve_relevance(semantic_similarity, keywords, neuron_text)
+    relevance = _resolve_relevance(semantic_similarity, keywords, neuron_text, hybrid_score)
     combined = _compute_gated_combined(burst, impact, precision, novelty, recency, relevance)
     combined = _apply_classification_boost(combined, dept_match, role_match)
 

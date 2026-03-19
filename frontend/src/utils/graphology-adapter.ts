@@ -259,14 +259,46 @@ export function graph3DToGraphology(data: Graph3DResponse): Graph {
   const graph = new Graph({ type: 'undirected', multi: true });
   const nodeIds = new Set<string>();
 
+  // Build hierarchical initial positions: departments spread on X, layers on Y
+  const departments = [...new Set(data.nodes.map(n => n.department ?? 'Concepts'))].sort();
+  const deptIndex = new Map(departments.map((d, i) => [d, i]));
+  const deptCount = departments.length || 1;
+
+  // Group nodes by department+layer for spacing
+  const deptLayerCounts = new Map<string, number>();
+  const deptLayerSeen = new Map<string, number>();
+  for (const n of data.nodes) {
+    const key = `${n.department ?? 'Concepts'}|${n.layer}`;
+    deptLayerCounts.set(key, (deptLayerCounts.get(key) ?? 0) + 1);
+    deptLayerSeen.set(key, 0);
+  }
+
+  const layerSpacing = 200;
+  const deptSpread = 300;
+
   for (const n of data.nodes) {
     const id = `n-${n.id}`;
     const isConcept = n.layer === -1;
     const dept = n.department ?? 'Concepts';
+    const di = deptIndex.get(dept) ?? 0;
+    const key = `${dept}|${n.layer}`;
+    const idx = deptLayerSeen.get(key) ?? 0;
+    deptLayerSeen.set(key, idx + 1);
+    const count = deptLayerCounts.get(key) ?? 1;
+
+    // X: department arc position + spread within department
+    const deptAngle = (di / deptCount) * 2 * Math.PI;
+    const deptCenterX = Math.cos(deptAngle) * deptSpread;
+    const deptCenterY = Math.sin(deptAngle) * deptSpread;
+    // Offset within dept-layer group
+    const withinSpread = Math.min(80, 200 / Math.max(1, count));
+    const offsetX = (idx - count / 2) * withinSpread * 0.3;
+    const offsetY = n.layer * layerSpacing * 0.15;
+
     graph.addNode(id, {
       label: n.label,
-      x: Math.random() * 1000 - 500,
-      y: Math.random() * 1000 - 500,
+      x: deptCenterX + offsetX + (Math.random() - 0.5) * 20,
+      y: deptCenterY + offsetY + (Math.random() - 0.5) * 20,
       size: layerSize(n.layer),
       color: isConcept ? CONCEPT_COLOR : deptColor(dept),
       department: dept,
@@ -280,6 +312,23 @@ export function graph3DToGraphology(data: Graph3DResponse): Graph {
     nodeIds.add(id);
   }
 
+  // Hierarchy edges (parent→child) — these give FA2 structural pull
+  for (const n of data.nodes) {
+    if (n.parent_id == null) continue;
+    const childId = `n-${n.id}`;
+    const parentId = `n-${n.parent_id}`;
+    if (!nodeIds.has(parentId)) continue;
+    const edgeKey = `h-${n.parent_id}-${n.id}`;
+    if (graph.hasEdge(edgeKey)) continue;
+    graph.addEdgeWithKey(edgeKey, parentId, childId, {
+      weight: 1.5,
+      color: '#3b82f618',
+      edgeKind: 'hierarchy',
+      size: 0.3,
+    });
+  }
+
+  // Co-firing / stellate edges
   for (const e of data.edges) {
     const srcId = `n-${e.source_id}`;
     const tgtId = `n-${e.target_id}`;

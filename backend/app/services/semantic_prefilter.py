@@ -47,6 +47,45 @@ class _EmbeddingCache:
             self._matrix = None
             self._neuron_ids = []
 
+    def update_neurons(
+        self, neuron_ids: list[int], embeddings: list[list[float]]
+    ) -> None:
+        """Incrementally update or append neurons without full cache rebuild.
+
+        Existing neurons are updated in-place; new neurons are appended via vstack.
+        """
+        assert len(neuron_ids) == len(embeddings), "neuron_ids and embeddings must match"
+        with self._lock:
+            if not self._loaded or self._matrix is None:
+                return
+            id_to_idx = {nid: i for i, nid in enumerate(self._neuron_ids)}
+            new_ids: list[int] = []
+            new_vecs: list[list[float]] = []
+            for nid, emb in zip(neuron_ids, embeddings):
+                if nid in id_to_idx:
+                    self._matrix[id_to_idx[nid]] = np.array(emb, dtype=np.float32)
+                else:
+                    new_ids.append(nid)
+                    new_vecs.append(emb)
+            if new_ids:
+                new_matrix = np.array(new_vecs, dtype=np.float32)
+                self._matrix = np.vstack([self._matrix, new_matrix])
+                self._neuron_ids.extend(new_ids)
+
+    def remove_neurons(self, neuron_ids: list[int]) -> None:
+        """Remove neurons from cache via mask rebuild."""
+        with self._lock:
+            if not self._loaded or self._matrix is None:
+                return
+            remove_set = set(neuron_ids)
+            keep_mask = [i for i, nid in enumerate(self._neuron_ids) if nid not in remove_set]
+            if len(keep_mask) == len(self._neuron_ids):
+                return
+            self._neuron_ids = [self._neuron_ids[i] for i in keep_mask]
+            self._matrix = self._matrix[keep_mask] if keep_mask else None
+            if self._matrix is None:
+                self._loaded = False
+
     def query(self, query_vec: list[float], top_n: int, min_similarity: float) -> list[tuple[int, float]]:
         """Return top-N (neuron_id, similarity) pairs above min_similarity.
 
@@ -118,6 +157,40 @@ async def ensure_cache_loaded(db):
 def invalidate_cache():
     """Call after embedding new neurons to force reload."""
     _cache.invalidate()
+
+
+async def update_cache_incremental(db, neuron_ids: list[int]) -> None:
+    """Incrementally update the cache for specific neurons instead of full reload.
+
+    Loads only the specified neurons from DB and updates or appends them
+    into the existing cache. Falls back to full invalidation if cache not loaded.
+    """
+    assert len(neuron_ids) > 0, "neuron_ids must not be empty"
+    if not _cache.is_loaded:
+        return
+
+    from sqlalchemy import text
+    placeholders = ", ".join(str(int(nid)) for nid in neuron_ids)
+    result = await db.execute(
+        text(f"SELECT id, embedding FROM neurons WHERE id IN ({placeholders}) AND embedding IS NOT NULL")
+    )
+    rows = result.all()
+    if not rows:
+        return
+
+    loaded_ids: list[int] = []
+    loaded_embeddings: list[list[float]] = []
+    for nid, emb_json in rows:
+        try:
+            vec = json.loads(emb_json)
+            loaded_ids.append(nid)
+            loaded_embeddings.append(vec)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    if loaded_ids:
+        _cache.update_neurons(loaded_ids, loaded_embeddings)
+        print(f"Semantic cache incremental update: {len(loaded_ids)} neurons")
 
 
 async def semantic_prefilter(

@@ -149,7 +149,7 @@ export default function Aiuc1Page() {
       detail: 'System is transparently an AI tool \u2014 the entire UI is built around inspecting AI decision-making. No scenario where a user wouldn\'t know they\'re interacting with AI-generated content.',
       source: { nist: 'MAP 2.2, 3.4, MEASURE 2.8', iso: 'A.8.2', eu: 'Art. 13, 50' } },
     { id: 'E017', title: 'Document System Transparency Policy', status: 'addressed',
-      detail: '5-signal scoring is inherently interpretable. Spread activation paths visible in UI. Neuron content inspectable. Token budgets transparent. System card documents all architectural decisions.',
+      detail: '6-signal gated scoring is inherently interpretable. Spread activation paths visible in UI. Neuron content inspectable. Token budgets transparent. System card documents all architectural decisions.',
       source: { nist: 'GOVERN 1.1, 1.2, MAP 1.1, 1.6', iso: '5.2, A.4.2, A.8.2', eu: 'Art. 11' } },
   ];
 

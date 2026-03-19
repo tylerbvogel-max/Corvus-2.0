@@ -30,7 +30,7 @@ export default function NextSteps() {
             </tr>
             <tr>
               <td style={{ fontWeight: 600 }}>No automated backups</td>
-              <td>PostgreSQL has no scheduled <code>pg_dump</code>. A bad migration, accidental truncate, or disk failure loses 2,055 neurons, 40K edges, and all query/eval history.</td>
+              <td>PostgreSQL has no scheduled <code>pg_dump</code>. A bad migration, accidental truncate, or disk failure loses 2,000+ neurons, 40K edges, and all query/eval history.</td>
               <td>Cron job running daily <code>pg_dump</code> with retention. Store locally + optional offsite sync.</td>
             </tr>
             <tr>
@@ -71,7 +71,7 @@ export default function NextSteps() {
             </tr>
             <tr>
               <td style={{ fontWeight: 600 }}>Full-text search</td>
-              <td>2,055 neurons and growing, but no search endpoint. Explorer relies on tree browsing. Users can&rsquo;t type &ldquo;ITAR&rdquo; and see every neuron mentioning it &mdash; only the ones with matching tags.</td>
+              <td>2,000+ neurons and growing, but no search endpoint. Explorer relies on tree browsing. Users can&rsquo;t type &ldquo;ITAR&rdquo; and see every neuron mentioning it &mdash; only the ones with matching tags.</td>
               <td>PostgreSQL <code>tsvector</code> index on neuron label + content + summary. Search API endpoint + Explorer search bar.</td>
             </tr>
             <tr>
@@ -160,9 +160,9 @@ export default function NextSteps() {
             <tr><th>Component</th><th>Description</th></tr>
           </thead>
           <tbody>
-            <tr><td>Neuron Graph</td><td>2,031-node 6-layer hierarchy (Department &rarr; Role &rarr; Task &rarr; System &rarr; Decision &rarr; Output) with 5-signal scoring (Burst, Impact, Precision, Novelty, Recency). 9 departments, 51 roles.</td></tr>
+            <tr><td>Neuron Graph</td><td>2,000+-node 6-layer hierarchy (Department &rarr; Role &rarr; Task &rarr; System &rarr; Decision &rarr; Output) with 6-signal gated scoring (Relevance stimulus gate + Burst, Impact, Precision, Novelty, Recency). 10 departments, 55+ roles.</td></tr>
             <tr><td>Multi-Hop Spread Activation</td><td>Frontier-based BFS through co-firing graph with compounding decay (Collins &amp; Loftus 1975, SA-RAG). Up to 3 hops, max-path aggregation to prevent hub bias.</td></tr>
-            <tr><td>Co-Firing Edge Graph</td><td>224,920 Hebbian edges formed when neurons fire together. Weighted by frequency. Feeds spread activation and cross-domain discovery.</td></tr>
+            <tr><td>Co-Firing Edge Graph</td><td>~40K Hebbian edges (pruned from 229K) formed when neurons fire together. Weighted by frequency. Feeds spread activation and cross-domain discovery.</td></tr>
             <tr><td>Blind A/B Evaluation</td><td>Multi-slot parallel execution, blind scoring (accuracy, completeness, clarity, faithfulness, overall), external export for ChatGPT review. BH-FDR statistical correction.</td></tr>
             <tr><td>Bolster &amp; Autopilot</td><td>LLM-proposed neuron expansion with human review (bolster) and autonomous training loop (autopilot). Source origin tracking per neuron.</td></tr>
             <tr><td>Utility Feedback</td><td>User ratings flow back to neurons via EMA. Neurons that contribute to good answers rise; bad answers sink them.</td></tr>
@@ -201,7 +201,7 @@ export default function NextSteps() {
         <p>
           Expanding all 51 roles from skeletal (5&ndash;15 neurons) to full L2&rarr;L5 depth (60&ndash;100+ neurons each).
           Runs continuously via autopilot and manual bolster sessions, in parallel with all other phases.
-          Current total: <strong>2,031 neurons</strong>. Target: <strong>~3,000+</strong>.
+          Current total: <strong>2,180+ neurons</strong>. Target: <strong>~3,000+</strong>.
         </p>
         <p>
           Process: <code>POST /admin/bolster</code> with Sonnet, referencing government publications,
@@ -258,7 +258,7 @@ export default function NextSteps() {
 
         <h4>RAG Layer (Semantic Retrieval) <span style={{ fontSize: '0.7rem', color: '#22c55e' }}>&mdash; Done (semantic prefilter)</span></h4>
         <ul>
-          <li><s><strong>Embed neuron content</strong></s> &mdash; <strong>Done.</strong> All 2,054 neurons embedded with <code>all-MiniLM-L6-v2</code> (384-dim). In-memory numpy cache (~3MB) for O(1ms) matrix dot product.</li>
+          <li><s><strong>Embed neuron content</strong></s> &mdash; <strong>Done.</strong> All 2,180+ neurons embedded with <code>all-MiniLM-L6-v2</code> (384-dim). In-memory numpy cache (~3MB) for O(1ms) matrix dot product.</li>
           <li><s><strong>Dual retrieval</strong></s> &mdash; <strong>Done.</strong> Semantic prefilter is the primary candidate selection path; classification output provides dept/role scoring boosts. Org-chart filtering retained as fallback when embeddings unavailable.</li>
           <li><s><strong>Incremental re-embedding</strong></s> &mdash; <strong>Done.</strong> Cache invalidated on <code>POST /admin/embed-neurons</code>. New neurons embedded at create time.</li>
         </ul>
@@ -565,12 +565,12 @@ export default function NextSteps() {
             </tr>
           </thead>
           <tbody>
-            <tr><td>&mdash;</td><td>Neuron graph + 6-signal gated scoring (2,054 neurons)</td><td><span className="status-badge built">Built</span></td></tr>
+            <tr><td>&mdash;</td><td>Neuron graph + 6-signal gated scoring (2,180+ neurons)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Semantic prefilter (embedding-primary candidate selection)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Inhibitory regulation (3-pass: density, redundancy, cross-ref floor)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Multi-hop spread activation (typed edges: stellate + pyramidal)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Blind A/B evaluation + BH-FDR correction</td><td><span className="status-badge built">Built</span></td></tr>
-            <tr><td>&mdash;</td><td>Co-firing edge graph (224,920+ edges)</td><td><span className="status-badge built">Built</span></td></tr>
+            <tr><td>&mdash;</td><td>Co-firing edge graph (~40K+ edges, pruned from 229K)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Bolster + Autopilot</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Source-typed neurons + reference detection</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Emergent queue (data model + API)</td><td><span className="status-badge built">Built</span></td></tr>
@@ -587,7 +587,7 @@ export default function NextSteps() {
             <tr><td>&mdash;</td><td>Structural fast path (zero-cost deterministic resolver)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Per-project neuron caching (ProjectProfile + boost)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>&mdash;</td><td>Auto-clustering (label propagation + emergent_cluster gap)</td><td><span className="status-badge built">Built</span></td></tr>
-            <tr><td>1</td><td>Role bolstering (2,054 &rarr; 3,000+ neurons)</td><td><span className="status-badge planned">Active</span></td></tr>
+            <tr><td>1</td><td>Role bolstering (2,180+ &rarr; 3,000+ neurons)</td><td><span className="status-badge planned">Active</span></td></tr>
             <tr><td>2</td><td>Emergent Queue UI + ingestion pipeline</td><td><span className="status-badge planned">Next</span></td></tr>
             <tr><td>2</td><td>Source Coverage analytics + verification</td><td><span className="status-badge planned">Next</span></td></tr>
             <tr><td>3</td><td>Structured prompt assembly</td><td><span className="status-badge planned">Planned</span></td></tr>
@@ -596,7 +596,7 @@ export default function NextSteps() {
             <tr><td>3</td><td>Cross-reference chasing</td><td><span className="status-badge planned">Planned</span></td></tr>
             <tr><td>4</td><td>Sonnet model routing</td><td><span className="status-badge planned">Planned</span></td></tr>
             <tr><td>5</td><td>Theme pre-scoring (Cog-RAG)</td><td><span className="status-badge planned">Backlog</span></td></tr>
-            <tr><td>5</td><td>Community detection (GraphRAG Leiden)</td><td><span className="status-badge planned">Backlog</span></td></tr>
+            <tr><td>5</td><td>Community detection (GraphRAG Leiden)</td><td><span className="status-badge built">Built</span></td></tr>
             <tr><td>5</td><td>Community summaries (GraphRAG)</td><td><span className="status-badge planned">Backlog</span></td></tr>
             <tr><td>6</td><td>Microglia (hallucination + logical flaw detection)</td><td><span className="status-badge planned">Partial</span></td></tr>
             <tr><td>6</td><td>Ependymal (alignment check, dedup, re-parent, prune)</td><td><span className="status-badge planned">Partial</span></td></tr>

@@ -158,8 +158,8 @@ export default function SigmaGraph({
     // Start ForceAtlas2 layout
     if (autoLayout && graph.order > 1) {
       const nodeCount = graph.order;
-      const gravity = layoutSettings?.gravity ?? (nodeCount < 500 ? 0.8 : nodeCount < 2000 ? 0.5 : 0.3);
-      const scalingRatio = layoutSettings?.scalingRatio ?? (nodeCount < 500 ? 15 : nodeCount < 2000 ? 30 : 60);
+      const gravity = layoutSettings?.gravity ?? (nodeCount < 500 ? 0.8 : nodeCount < 2000 ? 1.0 : 0.5);
+      const scalingRatio = layoutSettings?.scalingRatio ?? (nodeCount < 500 ? 15 : nodeCount < 2000 ? 20 : 40);
 
       try {
         layout = new FA2Layout(graph, {

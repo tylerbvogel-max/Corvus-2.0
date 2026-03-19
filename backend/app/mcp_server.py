@@ -5,12 +5,60 @@ Shares the same PostgreSQL connection pool as the FastAPI app.
 """
 
 import json
+from types import MappingProxyType
 
 from mcp.server.fastmcp import FastMCP
 
 from app.database import async_session
 from app.models import Neuron, NeuronEdge, SystemState, Query
 from sqlalchemy import select, func, or_
+
+# Next-step hints for AI agent tool chaining (JPL-6: immutable mapping)
+TOOL_HINTS = MappingProxyType({
+    "query_graph": (
+        "Use neuron_detail(neuron_id) to inspect a specific neuron's content and edges",
+        "Use impact_analysis(topic) for zero-cost semantic search on a related topic",
+        "Use discover_clusters() to find cross-department knowledge patterns",
+    ),
+    "impact_analysis": (
+        "Use neuron_detail(neuron_id) to get full content for any neuron in the results",
+        "Use query_graph(query) to run the full scoring pipeline with these neurons",
+        "Use browse_departments(department) to explore related roles in a department",
+    ),
+    "neuron_detail": (
+        "Use impact_analysis(topic) to find neurons semantically similar to this one",
+        "Use browse_departments(department) to see sibling roles in the same department",
+        "Use query_graph(query) to see how this neuron scores against a specific query",
+    ),
+    "browse_departments": (
+        "Use neuron_detail(neuron_id) to inspect a specific neuron within a role",
+        "Use impact_analysis(topic) to search across all departments by meaning",
+        "Use graph_stats() to see overall graph health and coverage",
+    ),
+    "graph_stats": (
+        "Use browse_departments() to drill into a specific department",
+        "Use discover_clusters() to find emergent cross-department patterns",
+        "Use cost_report() to check API cost and token usage",
+    ),
+    "cost_report": (
+        "Use graph_stats() to see neuron graph health alongside cost data",
+        "Use query_graph(query) to run a query and see per-query cost breakdown",
+    ),
+    "discover_clusters": (
+        "Use neuron_detail(neuron_id) to inspect neurons within a cluster",
+        "Use impact_analysis(topic) to find related neurons outside the cluster",
+        "Use browse_departments() to compare cluster membership against org hierarchy",
+    ),
+})
+
+
+def _with_hints(tool_name: str, result_dict: dict) -> str:
+    """Inject next_steps hints into a tool result dict and return JSON string."""
+    assert isinstance(result_dict, dict), f"result_dict must be a dict, got {type(result_dict)}"
+    assert tool_name in TOOL_HINTS, f"Unknown tool: {tool_name}"
+    result_dict["next_steps"] = list(TOOL_HINTS[tool_name])
+    return json.dumps(result_dict, indent=2)
+
 
 mcp = FastMCP(
     "corvus",
@@ -47,26 +95,36 @@ async def query_graph(query: str, top_k: int = 30, token_budget: int = 4000, pro
         )
         await db.commit()
 
-        return json.dumps({
+        return _with_hints("query_graph", {
             "system_prompt": ctx.system_prompt,
             "neurons_activated": ctx.neurons_activated,
             "departments": ctx.departments,
             "intent": ctx.intent,
             "classify_cost_usd": ctx.classify_cost_usd,
             "neuron_scores": ctx.neuron_scores[:10],  # Top 10 for brevity
-        }, indent=2)
+        })
 
 
 @mcp.tool()
-async def impact_analysis(topic: str, top_n: int = 20) -> str:
-    """Find neurons most semantically similar to a topic. Pure CPU + DB read, zero API cost.
+async def impact_analysis(topic: str, top_n: int = 20, graph_trace: bool = True) -> str:
+    """Find neurons related to a topic via semantic search and graph traversal blast radius.
+
+    With graph_trace=True (default): seeds top-N semantic matches, then BFS through
+    co-firing edges to discover direct (1-hop), indirect (2-hop), and transitive (3-hop)
+    impact. Returns tiered results with confidence scores.
+
+    With graph_trace=False: returns only semantic similarity results (original behavior).
+
+    Pure CPU + DB read, zero API cost.
 
     Args:
         topic: The topic to search for
-        top_n: Number of top neurons to return (default 20)
+        top_n: Number of top seed neurons for semantic search (default 20)
+        graph_trace: Enable graph traversal blast radius (default True)
     """
     import concurrent.futures
     import asyncio
+    from app.config import settings
 
     try:
         loop = asyncio.get_running_loop()
@@ -86,6 +144,24 @@ async def impact_analysis(topic: str, top_n: int = 20) -> str:
         cand_ids = [nid for nid, _ in candidates]
         sim_map = {nid: sim for nid, sim in candidates}
 
+        if graph_trace:
+            # Use top seeds for blast radius BFS
+            from app.services.impact_service import compute_blast_radius
+            seed_count = min(settings.impact_seed_count, len(cand_ids))
+            seed_ids = cand_ids[:seed_count]
+
+            blast = await compute_blast_radius(
+                db, seed_ids, sim_map,
+                max_hops=settings.impact_max_hops,
+                min_edge_weight=settings.impact_min_edge_weight,
+            )
+            return _with_hints("impact_analysis", {
+                "mode": "graph_trace",
+                "topic": topic,
+                **blast,
+            })
+
+        # Flat semantic-only results (original behavior)
         result = await db.execute(select(Neuron).where(Neuron.id.in_(cand_ids)))
         neurons = {n.id: n for n in result.scalars().all()}
 
@@ -103,7 +179,7 @@ async def impact_analysis(topic: str, top_n: int = 20) -> str:
                 "similarity": round(sim_map.get(nid, 0), 4),
             })
 
-        return json.dumps({"neurons": output}, indent=2)
+        return _with_hints("impact_analysis", {"neurons": output})
 
 
 @mcp.tool()
@@ -147,7 +223,7 @@ async def neuron_detail(neuron_id: int) -> str:
                 "co_fire_count": e.co_fire_count,
             })
 
-        return json.dumps({
+        return _with_hints("neuron_detail", {
             "id": neuron.id,
             "label": neuron.label,
             "layer": neuron.layer,
@@ -160,7 +236,7 @@ async def neuron_detail(neuron_id: int) -> str:
             "avg_utility": round(neuron.avg_utility, 4) if neuron.avg_utility else 0,
             "is_active": neuron.is_active,
             "top_edges": edge_list,
-        }, indent=2)
+        })
 
 
 @mcp.tool()
@@ -181,12 +257,12 @@ async def browse_departments(department: str | None = None) -> str:
                 .group_by(Neuron.department)
                 .order_by(func.count(Neuron.id).desc())
             )
-            return json.dumps({
+            return _with_hints("browse_departments", {
                 "departments": [
                     {"name": dept, "neuron_count": count}
                     for dept, count in result.all()
                 ]
-            }, indent=2)
+            })
         else:
             result = await db.execute(
                 select(Neuron.role_key, func.count(Neuron.id))
@@ -198,13 +274,13 @@ async def browse_departments(department: str | None = None) -> str:
                 .group_by(Neuron.role_key)
                 .order_by(func.count(Neuron.id).desc())
             )
-            return json.dumps({
+            return _with_hints("browse_departments", {
                 "department": department,
                 "roles": [
                     {"role_key": rk, "neuron_count": count}
                     for rk, count in result.all()
                 ]
-            }, indent=2)
+            })
 
 
 @mcp.tool()
@@ -240,14 +316,14 @@ async def graph_stats() -> str:
                 select(func.count(NeuronFiring.id))
             )).scalar() or 0
 
-        return json.dumps({
+        return _with_hints("graph_stats", {
             "total_neurons": total,
             "total_edges": edge_count,
             "total_queries": state.total_queries if state else 0,
             "total_firings": total_firings,
             "by_layer": {f"L{layer}": count for layer, count in by_layer.all()},
             "by_department": {dept: count for dept, count in by_dept.all()},
-        }, indent=2)
+        })
 
 
 @mcp.tool()
@@ -269,19 +345,19 @@ async def cost_report() -> str:
         execute_tokens = int(row[3])
         total_tokens = classify_tokens + execute_tokens
 
-        return json.dumps({
+        return _with_hints("cost_report", {
             "total_queries": total_queries,
             "total_cost_usd": round(total_cost, 6),
             "avg_cost_per_query": round(total_cost / total_queries, 6) if total_queries else 0,
             "total_tokens": total_tokens,
             "classify_tokens": classify_tokens,
             "execute_tokens": execute_tokens,
-        }, indent=2)
+        })
 
 
 @mcp.tool()
-async def discover_clusters(min_weight: float = 0.3, min_size: int = 3) -> str:
-    """Discover emergent cross-department neuron clusters via label propagation on co-firing edges.
+async def discover_clusters(min_weight: float = 0.3, min_size: int = 3, resolution: float = 1.0) -> str:
+    """Discover emergent cross-department neuron clusters via Leiden community detection on co-firing edges.
 
     Finds groups of neurons that frequently co-fire across department boundaries,
     revealing hidden knowledge patterns the manual hierarchy doesn't capture.
@@ -289,13 +365,14 @@ async def discover_clusters(min_weight: float = 0.3, min_size: int = 3) -> str:
     Args:
         min_weight: Minimum edge weight to include (default 0.3)
         min_size: Minimum cluster size (default 3)
+        resolution: Leiden resolution parameter (default 1.0). Higher = more, smaller clusters.
     """
     from app.services.clustering import find_clusters
 
     async with async_session() as db:
-        clusters = await find_clusters(db, min_weight=min_weight, min_size=min_size)
+        clusters = await find_clusters(db, min_weight=min_weight, min_size=min_size, resolution=resolution)
 
-        return json.dumps({
+        return _with_hints("discover_clusters", {
             "cluster_count": len(clusters),
             "clusters": [
                 {
@@ -309,7 +386,7 @@ async def discover_clusters(min_weight: float = 0.3, min_size: int = 3) -> str:
                 }
                 for c in clusters
             ]
-        }, indent=2)
+        })
 
 
 if __name__ == "__main__":

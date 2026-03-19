@@ -23,7 +23,7 @@ export default function MonetizationPage() {
               <tr>
                 <td>Neuron graph + 6-layer hierarchy</td>
                 <td>180&ndash;220</td>
-                <td style={{ color: 'var(--text-dim)' }}>2,055 neurons, department/role/task/system/decision/output layers, seed data pipeline, CRUD + bulk operations</td>
+                <td style={{ color: 'var(--text-dim)' }}>2,180+ neurons, department/role/task/system/decision/output layers, seed data pipeline, CRUD + bulk operations</td>
               </tr>
               <tr>
                 <td>6-signal scoring engine</td>
@@ -48,7 +48,7 @@ export default function MonetizationPage() {
               <tr>
                 <td>Eval framework + drift detection</td>
                 <td>60&ndash;80</td>
-                <td style={{ color: 'var(--text-dim)' }}>Blind A/B evaluation, z-score drift on 5 signals, provenance tracking with neuron source links</td>
+                <td style={{ color: 'var(--text-dim)' }}>Blind A/B evaluation, z-score drift on 6 signals, provenance tracking with neuron source links</td>
               </tr>
               <tr>
                 <td>Compliance architecture</td>
@@ -127,7 +127,7 @@ export default function MonetizationPage() {
             <li><strong style={{ color: 'var(--text)' }}>Quantifiable labor savings</strong> &mdash; Corvus displaces 25&ndash;40% of compliance analyst, research analyst, program coordinator, and quality auditor workload. At a mid-size org, that&apos;s $350K&ndash;$700K/year in savings. A buyer acquiring this IP can immediately deploy it internally to reduce headcount growth, or resell it to customers with a concrete ROI pitch backed by the labor savings model.</li>
             <li><strong style={{ color: 'var(--text)' }}>Eliminated build risk</strong> &mdash; Buyer gets a proven, working system. No architectural false starts, no &ldquo;6 months in and we need to pivot the scoring model.&rdquo; A ground-up build has ~30% chance of significant rework; buying eliminates that.</li>
             <li><strong style={{ color: 'var(--text)' }}>Time-to-market</strong> &mdash; 12&ndash;18 months of development compressed to an integration timeline. In regulated industries where compliance certification alone takes 3&ndash;6 months, the calendar savings are worth more than the dollar savings.</li>
-            <li><strong style={{ color: 'var(--text)' }}>Domain-specific neuron corpus</strong> &mdash; 2,055 neurons across 9 aerospace departments with co-firing relationships isn&apos;t just code &mdash; it&apos;s curated institutional knowledge. Recreating the corpus requires the same domain research regardless of how good your engineers are.</li>
+            <li><strong style={{ color: 'var(--text)' }}>Domain-specific neuron corpus</strong> &mdash; 2,180+ neurons across 10 aerospace departments with co-firing relationships isn&apos;t just code &mdash; it&apos;s curated institutional knowledge. Recreating the corpus requires the same domain research regardless of how good your engineers are.</li>
             <li><strong style={{ color: 'var(--text)' }}>Compliance head start</strong> &mdash; NIST AI RMF gap analysis, AIUC-1 assessment with 45 requirements, ISO 42001 crosswalk already mapped. A buyer in defense/aerospace needs this anyway; getting it pre-built with the product saves 200+ hours of compliance work.</li>
             <li><strong style={{ color: 'var(--text)' }}>Two-product platform</strong> &mdash; Corvus (knowledge retrieval) and Corvus (continuous monitoring) are distinct product surfaces that share infrastructure. A buyer gets two monetizable products from one acquisition, each with its own expansion path: Corvus scales via MCP integrations, Corvus scales via per-seat deployment across teams.</li>
             <li><strong style={{ color: 'var(--text)' }}>Evaluation infrastructure</strong> &mdash; Blind A/B framework, drift detection, autopilot with gap detection, provenance tracking. This is the kind of infrastructure that gets deprioritized in internal builds but is critical for production AI systems.</li>
@@ -458,9 +458,9 @@ export default function MonetizationPage() {
         <h3 style={{ color: 'var(--accent)', marginBottom: 12 }}>Current Development Scope</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
           {[
-            { label: 'Neurons', value: '2,055', sub: '9 departments, 52 roles' },
-            { label: 'Co-firing Edges', value: '40,595', sub: 'Spread activation graph' },
-            { label: 'Queries Executed', value: '189', sub: '5,209 neuron firings' },
+            { label: 'Neurons', value: '2,180+', sub: '10 departments, 55+ roles' },
+            { label: 'Co-firing Edges', value: '~40K', sub: 'Spread activation graph (pruned from 229K)' },
+            { label: 'Queries Executed', value: '243+', sub: '10,452+ neuron firings' },
             { label: 'Evaluations', value: '262', sub: 'Blind A/B scored' },
             { label: 'Refinements', value: '1,623', sub: 'Graph mutations logged' },
             { label: 'Autopilot Runs', value: '123', sub: 'Autonomous gap-filling' },

@@ -2377,11 +2377,11 @@ async def create_concept_neuron_endpoint(
 ):
     """Create a new concept neuron (layer=-1, department-agnostic)."""
     from app.services.concept_service import create_concept_neuron
-    from app.services.semantic_prefilter import invalidate_cache
+    from app.services.semantic_prefilter import update_cache_incremental
 
     neuron = await create_concept_neuron(db, label, content, summary)
     await db.commit()
-    invalidate_cache()
+    await update_cache_incremental(db, [neuron.id])
 
     return {
         "id": neuron.id,

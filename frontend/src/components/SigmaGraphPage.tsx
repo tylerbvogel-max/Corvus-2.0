@@ -30,16 +30,16 @@ export default function SigmaGraphPage() {
   // Fetch graph data
   useEffect(() => {
     setLoading(true);
-    fetch('/api/neurons/graph3d')
+    fetch('/neurons/graph-3d')
       .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
-      .then((data: Graph3DResponse) => { setRawData(data); setError(null); })
+      .then((data: any) => { setRawData({ nodes: data.neurons ?? data.nodes ?? [], edges: data.edges ?? [] }); setError(null); })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
 
   // Fetch clusters for community coloring
   useEffect(() => {
-    fetch('/api/neurons/clusters')
+    fetch('/neurons/clusters')
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data?.clusters) setClusters(data.clusters); })
       .catch(() => {});

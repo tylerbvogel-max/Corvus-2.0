@@ -29,10 +29,11 @@ import ObservationReviewPage from './components/ObservationReviewPage'
 import ComplianceDashboard from './components/ComplianceDashboard'
 import HomePage from './components/HomePage'
 import EndUserStrategyPage from './components/EndUserStrategyPage'
+import PitchPage from './components/PitchPage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'monetization' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'end-user-strategy';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'monetization' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'end-user-strategy' | 'pitch';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -106,6 +107,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: 'About',
     items: [
+      { key: 'pitch', label: 'Pitch', labelColor: '#3b82f6' },
       { key: 'getting-started', label: 'Getting Started' },
       { key: 'about', label: 'Overview' },
       { key: 'arch-plan', label: 'Architecture Plan' },
@@ -211,7 +213,7 @@ export default function App() {
         {!collapsed && (
           <div className="sidebar-info-area" style={{ padding: '8px 12px', fontSize: '11px', color: 'var(--text-muted, #888)', borderTop: '1px solid var(--border, #333)', marginTop: 'auto' }}>
             <div style={{ marginBottom: 2, opacity: 0.7 }}>Running at <strong>http://localhost:8002</strong></div>
-            <div style={{ fontFamily: 'monospace', fontSize: '10px', opacity: 0.5, userSelect: 'all', cursor: 'text' }}>~/Projects/corvus</div>
+            <a href="https://github.com/tylerbvogel-max/Corvus-2.0" target="_blank" rel="noopener noreferrer" style={{ fontFamily: 'monospace', fontSize: '10px', opacity: 0.5, color: 'inherit', textDecoration: 'none' }} onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')} onMouseLeave={e => (e.currentTarget.style.opacity = '0.5')}>github.com/tylerbvogel-max/Corvus-2.0</a>
           </div>
         )}
         {/* Settings gear — always visible, even when collapsed */}
@@ -284,6 +286,7 @@ export default function App() {
         {tab === 'nextsteps' && <NextSteps />}
         {tab === 'getting-started' && <GettingStartedPage />}
         {tab === 'about' && <AboutPage />}
+        {tab === 'pitch' && <PitchPage />}
         {tab === 'arch-plan' && <ArchitecturePlanPage />}
         {tab === 'monetization' && <MonetizationPage />}
         {tab === 'end-user-strategy' && <EndUserStrategyPage />}

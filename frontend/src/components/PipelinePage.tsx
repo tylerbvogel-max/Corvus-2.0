@@ -467,7 +467,7 @@ export default function PipelinePage() {
                 <div className="flow-step-label">Query Embedding + Semantic Prefilter</div>
                 <div className="flow-step-desc">
                   Query is embedded via <code>all-MiniLM-L6-v2</code> (384-dim), then
-                  a matrix dot product against all ~2,054 neuron embeddings selects the top-N
+                  a matrix dot product against all neuron embeddings selects the top-N
                   candidates by cosine similarity. No department/role filtering &mdash; the
                   embedding is the filter.
                   <br /><em style={{ color: 'var(--text-dim)' }}>~11ms, runs in parallel with 2a</em>
