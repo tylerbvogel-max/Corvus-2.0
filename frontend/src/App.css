@@ -307,10 +307,6 @@ body {
   border-left-color: var(--accent);
 }
 
-.sidebar-item.nav-monetization { color: #ef4444; }
-.sidebar-item.nav-monetization:hover { color: #f87171; }
-.sidebar-item.nav-monetization.active { color: #ef4444; background: rgba(239, 68, 68, 0.08); border-left-color: #ef4444; }
-
 .app-main { flex: 1; overflow: auto; position: relative; }
 
 /* Settings gear */

@@ -281,8 +281,8 @@ export default function HomePage({ onNavigate }: { onNavigate: (tab: string) => 
       {!hasMessages && (
         <div className="home-hero">
           <img src="/corvus-logo.png" alt="Corvus" className="home-logo" />
-          <h1 className="home-title">Corvus</h1>
-          <p className="home-subtitle">Biomimetic knowledge graph for organizational intelligence</p>
+          <h1 className="home-title">Corvus Aero</h1>
+          <p className="home-subtitle">Biomimetic knowledge graph for aerospace & defense intelligence</p>
           <div className="home-shortcuts">
             <button className="home-shortcut" onClick={() => onNavigate('query')}>
               <svg className="home-shortcut-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

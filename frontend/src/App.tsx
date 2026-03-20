@@ -9,7 +9,6 @@ import NextSteps from './components/NextSteps'
 import AutopilotPage from './components/AutopilotPage'
 import CirclePacking from './components/CirclePacking'
 import AboutPage from './components/AboutPage'
-import MonetizationPage from './components/MonetizationPage'
 import SampleQueries from './components/SampleQueries'
 import DeptChordDiagram from './components/DeptChordDiagram'
 import GettingStartedPage from './components/GettingStartedPage'
@@ -28,12 +27,10 @@ import CorvusPage from './components/CorvusPage'
 import ObservationReviewPage from './components/ObservationReviewPage'
 import ComplianceDashboard from './components/ComplianceDashboard'
 import HomePage from './components/HomePage'
-import EndUserStrategyPage from './components/EndUserStrategyPage'
-import PitchPage from './components/PitchPage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'monetization' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'end-user-strategy' | 'pitch';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -107,15 +104,12 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: 'About',
     items: [
-      { key: 'pitch', label: 'Pitch', labelColor: '#3b82f6' },
       { key: 'getting-started', label: 'Getting Started' },
       { key: 'about', label: 'Overview' },
       { key: 'arch-plan', label: 'Architecture Plan' },
       { key: 'pipeline', label: 'Pipeline' },
       { key: 'method-risks', label: 'Risks' },
       { key: 'nextsteps', label: 'Next Steps' },
-      { key: 'end-user-strategy', label: 'End-User Strategy' },
-      { key: 'monetization', label: 'Monetization', className: 'nav-monetization' },
     ],
   },
 ];
@@ -172,7 +166,7 @@ export default function App() {
       <aside className={`sidebar${collapsed ? ' sidebar-collapsed' : ''}`}>
         <div className="sidebar-header">
           <img src="/corvus-logo-128.png" alt="Corvus" className="sidebar-logo" onClick={() => setTab('home')} style={{ cursor: 'pointer' }} />
-          {!collapsed && <h1 className="app-title" onClick={() => setTab('home')} style={{ cursor: 'pointer' }}>Corvus</h1>}
+          {!collapsed && <h1 className="app-title" onClick={() => setTab('home')} style={{ cursor: 'pointer' }}>Corvus Aero</h1>}
           <button
             className="sidebar-toggle"
             onClick={() => setCollapsed(c => !c)}
@@ -286,10 +280,7 @@ export default function App() {
         {tab === 'nextsteps' && <NextSteps />}
         {tab === 'getting-started' && <GettingStartedPage />}
         {tab === 'about' && <AboutPage />}
-        {tab === 'pitch' && <PitchPage />}
         {tab === 'arch-plan' && <ArchitecturePlanPage />}
-        {tab === 'monetization' && <MonetizationPage />}
-        {tab === 'end-user-strategy' && <EndUserStrategyPage />}
         {tab === 'compliance-dashboard' && <ComplianceDashboard />}
 
         {tab === 'mgmt-reviews' && <ManagementReviewPage />}
