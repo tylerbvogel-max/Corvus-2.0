@@ -4,6 +4,9 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str  # Required — set via DATABASE_URL env var or .env file
     anthropic_api_key: str = ""
+    port: int = 8002
+    tenant_id: str = "corvus-aero"
+    cors_origins: str = ""  # Comma-separated; empty = auto from port
     haiku_model: str = "claude-haiku-4-5-20251001"
     token_budget: int = 4000
     propagation_decay: float = 0.6
@@ -78,13 +81,7 @@ class Settings(BaseSettings):
     # Session and security headers (AC-12, SC-10, CMMC 3.1.11/3.13.9)
     session_timeout_minutes: int = 30
     # System use notification banner (AC-8, CMMC 3.1.9)
-    system_use_banner: str = (
-        "This is a U.S. Government-aligned information system. "
-        "By accessing and using this system, you acknowledge that usage may be monitored, "
-        "recorded, and subject to audit. Unauthorized use is prohibited and may result in "
-        "disciplinary action and/or civil and criminal penalties. "
-        "This system processes controlled and operationally sensitive information."
-    )
+    # Banner text is loaded from tenant config (tenant.system_use_banner)
     system_use_banner_enabled: bool = True
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

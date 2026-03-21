@@ -8,7 +8,9 @@ import httpx
 from app.compliance.registry import registry
 from app.compliance.types import EvidenceProvider, EvidenceResult, EvidenceType
 
-BASE_URL = "http://localhost:8002"
+from app.config import settings
+
+BASE_URL = f"http://localhost:{settings.port}"
 
 
 async def _test_cors_restrictive() -> EvidenceResult:

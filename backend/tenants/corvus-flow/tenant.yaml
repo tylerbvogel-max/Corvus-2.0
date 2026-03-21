@@ -1,0 +1,10 @@
+display_name: "Corvus Flow"
+description: "Plumbing trade knowledge codification engine. Two-stage Haiku pipeline with 5-signal neuron scoring."
+system_use_banner: >-
+  Corvus Flow — Trade Knowledge Codification Engine.
+  This system codifies plumbing trade knowledge across code compliance,
+  diagnostic procedures, and practitioner solutions.
+  Content is reference-only and does not replace licensed professional judgment.
+semantic_prefilter_enabled: false
+regulatory_department_name: "Code Compliance"
+reseed_threshold: 150

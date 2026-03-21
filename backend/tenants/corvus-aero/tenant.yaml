@@ -1,0 +1,11 @@
+display_name: "Corvus Aero"
+description: "Biomimetic neuron graph for aerospace defense prompt preparation. Two-stage Haiku pipeline with 5-signal scoring."
+system_use_banner: >-
+  This is a U.S. Government-aligned information system.
+  By accessing and using this system, you acknowledge that usage may be monitored,
+  recorded, and subject to audit. Unauthorized use is prohibited and may result in
+  disciplinary action and/or civil and criminal penalties.
+  This system processes controlled and operationally sensitive information.
+semantic_prefilter_enabled: true
+regulatory_department_name: "Regulatory"
+reseed_threshold: 150

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { fetchGovernanceDashboard } from '../api';
 import type { GovernanceDashboardResponse } from '../api';
+import { getTenantConfig } from '../config';
 
 export default function GovernancePage() {
+  const orgName = getTenantConfig()?.display_name ?? 'Organization';
   const [data, setData] = useState<GovernanceDashboardResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -555,7 +557,7 @@ export default function GovernancePage() {
               <td>Grounding check, faithfulness eval, speculative language flagging</td>
             </tr>
             <tr>
-              <td>Organization (Corvus Aero)</td>
+              <td>Organization ({orgName})</td>
               <td style={{ color: '#22c55e' }}>Knowledge preservation, 92% cost reduction vs Opus</td>
               <td style={{ color: '#ef4444' }}>Incorrect regulatory guidance, compliance risk</td>
               <td>Neuron provenance tracking, citation verification, human review gates</td>

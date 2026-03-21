@@ -1,16 +1,31 @@
 # Corvus
 
-Biomimetic neuron graph for prompt preparation. Two-stage Haiku pipeline: classify intent → score neurons → assemble context → execute with enriched prompt.
+Unified, multi-tenant neuron graph for prompt preparation. Two-stage Haiku pipeline: classify intent → score neurons → assemble context → execute with enriched prompt.
+
+## Multi-Tenant Architecture
+- **TENANT_ID** env var selects the tenant: `corvus-aero` (aerospace) or `corvus-flow` (plumbing)
+- Domain config lives in `backend/tenants/{tenant_id}/` (tenant.yaml + Python modules)
+- `backend/app/tenant.py` is the singleton loader — imported as `from app.tenant import tenant`
+- All domain-specific content (prompts, patterns, seed data, concepts, regulatory trees) is in tenant dirs
+- Service code is domain-agnostic — reads from `tenant.*` properties
 
 ## Stack
 - Python FastAPI + PostgreSQL (async SQLAlchemy + asyncpg) + Anthropic Python SDK
-- Port 8002
+- Alembic for schema migrations
+- Port: from `PORT` env var (default 8002)
 
 ## Dev Commands
 ```bash
 cd ~/Projects/corvus/backend
 source venv/bin/activate
-uvicorn app.main:app --port 8002 --reload
+TENANT_ID=corvus-aero PORT=8002 uvicorn app.main:app --port 8002 --reload
+# Or for plumbing tenant:
+TENANT_ID=corvus-flow PORT=8003 uvicorn app.main:app --port 8003 --reload
+```
+
+## Docker
+```bash
+TENANT_ID=corvus-aero docker compose up --build
 ```
 
 ## Key Concepts

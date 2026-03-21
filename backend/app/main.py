@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
+from app.config import settings
 from app.database import engine, async_session
 from app.models import Base, Neuron, SystemState, BatchJob, SourceDocument, NeuronSourceLink, ManagementReview, ComplianceSnapshot, EvidenceMapping, ObservationQueue
 from app.models_corvus import CorvusKnownApp, CorvusSession
@@ -23,6 +24,7 @@ from app.compliance.router import router as compliance_suite_router
 from app.compliance.models import ComplianceSuiteRun, ComplianceProviderResult, ComplianceAttestation  # noqa: F401 — for create_all
 from app.seed.loader import load_seed
 from app.seed.regulatory_seed import seed_regulatory
+from app.tenant import tenant
 
 
 async def _column_exists(conn, table: str, column: str) -> bool:
@@ -456,7 +458,7 @@ async def _seed_core_data():
         rcount = (await db.execute(
             select(func.count(Neuron.id)).where(Neuron.department == "Regulatory")
         )).scalar() or 0
-        force_reseed = rcount < 150
+        force_reseed = rcount < tenant.reseed_threshold
         if force_reseed:
             print(f"Regulatory neuron count ({rcount}) below v2 threshold — will force re-seed")
 
@@ -486,12 +488,7 @@ async def _seed_corvus_and_compliance():
         try:
             ka_count = (await db.execute(select(func.count(CorvusKnownApp.id)))).scalar() or 0
             if ka_count == 0:
-                for app_id, name, desc in [
-                    ("teams", "Microsoft Teams", "Team messaging and collaboration"),
-                    ("outlook", "Microsoft Outlook", "Email client"),
-                    ("jira", "Jira", "Issue tracking and project management"),
-                    ("databricks", "Databricks", "Data engineering and analytics platform"),
-                ]:
+                for app_id, name, desc in tenant.known_apps:
                     db.add(CorvusKnownApp(id=app_id, name=name, description=desc))
                 await db.commit()
                 print("Seeded Corvus known apps")
@@ -539,15 +536,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Corvus",
-    description="Biomimetic neuron graph for prompt preparation. Two-stage Haiku pipeline with 5-signal scoring.",
+    title=tenant.display_name,
+    description=tenant.description,
     version="0.1.0",
     lifespan=lifespan,
 )
 
+# CORS origins: from CORS_ORIGINS env var, or auto-derived from PORT
+_cors_origins = (
+    [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    if settings.cors_origins
+    else [f"http://localhost:5173", f"http://localhost:{settings.port}"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:8002"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -590,6 +594,16 @@ app.include_router(corvus.router)
 app.include_router(compliance_suite_router)
 
 
+@app.get("/tenant")
+async def get_tenant():
+    """Return tenant configuration for the frontend."""
+    return {
+        "tenant_id": tenant.tenant_id,
+        "display_name": tenant.display_name,
+        "description": tenant.description,
+    }
+
+
 @app.get("/health")
 async def health():
     """Return system health status with neuron count and total queries."""
@@ -613,7 +627,7 @@ if frontend_dist.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
     # SPA catch-all — must NOT match API prefixes
-    _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/docs", "/openapi", "/ingest", "/corvus")
+    _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/tenant", "/docs", "/openapi", "/ingest", "/corvus")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):

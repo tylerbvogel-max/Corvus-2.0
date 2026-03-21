@@ -5,9 +5,10 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Neuron, SystemState
+from app.tenant import tenant
 
 
-SEED_FILE = Path(__file__).parent / "corvus_org.yaml"
+SEED_FILE = tenant.org_yaml_path
 
 
 async def _add_neuron(db: AsyncSession, **kwargs) -> Neuron:

@@ -10,6 +10,8 @@ Returns a verdict: pass, warn, or block with reasons.
 
 import re
 
+from app.tenant import tenant
+
 # ── Prompt Injection Patterns ──
 # Each pattern is (compiled_regex, description, severity)
 _INJECTION_PATTERNS: list[tuple[re.Pattern, str, str]] = [
@@ -71,27 +73,8 @@ _CONTENT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
      "Possible credit card number detected", "warn"),
 ]
 
-# ── Risk Categories for Output Tagging ──
-RISK_CATEGORIES: dict[str, list[tuple[re.Pattern, str]]] = {
-    "safety_critical": [
-        (re.compile(r"\b(structural\s+failure|fatigue\s+crack|catastrophic|life[- ]?threatening|crash\s+worthiness)", re.I),
-         "References safety-critical failure mode"),
-        (re.compile(r"\b(single\s+point\s+of\s+failure|redundancy\s+requirement|fail[- ]?safe)", re.I),
-         "References safety-critical design requirement"),
-    ],
-    "dual_use": [
-        (re.compile(r"\b(munitions|ITAR\s+controlled|classified|export[- ]?controlled|weapons?\s+system)", re.I),
-         "References export-controlled or dual-use content"),
-        (re.compile(r"\b(explosiv|detonat|warhead|guidance\s+system|targeting)", re.I),
-         "References weapons-related content"),
-    ],
-    "speculative": [
-        (re.compile(r"\b(I\s+think|I\s+believe|it\s+(?:seems?|appears?)\s+(?:that|like)|probably|possibly|might\s+be|could\s+be|not\s+(?:entirely\s+)?sure)\b", re.I),
-         "Contains hedging/speculative language"),
-        (re.compile(r"\b(disclaimer|not\s+(?:a\s+)?(?:legal|professional)\s+advice|consult\s+(?:a|an|your)\s+)", re.I),
-         "Contains disclaimer language"),
-    ],
-}
+# ── Risk Categories for Output Tagging — loaded from tenant config ──
+RISK_CATEGORIES = tenant.risk_categories
 
 
 class InputGuardResult:
@@ -204,7 +187,7 @@ def check_output_grounding(response_text: str, assembled_prompt: str | None) -> 
 
     # Also check for specific claims that aren't in context
     # Look for references, standards, numbers that appear in response but not context
-    ref_pattern = re.compile(r'\b(?:FAR|DFARS|MIL-STD|AS\d+|NADCAP|ISO\s*\d+|AMS\s*\d+|SAE\s+\w+)\b[\s\-]?[\d.]*', re.I)
+    ref_pattern = tenant.grounding_ref_pattern
     response_refs = set(ref_pattern.findall(response_text))
     context_refs = set(ref_pattern.findall(assembled_prompt))
     ungrounded_refs = response_refs - context_refs

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import Explorer from './components/Explorer'
 import Dashboard from './components/Dashboard'
 import QueryLab from './components/QueryLab'
@@ -29,6 +29,7 @@ import ComplianceDashboard from './components/ComplianceDashboard'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
+import { fetchTenantConfig, TenantConfig } from './config'
 
 type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations';
 
@@ -131,6 +132,14 @@ export default function App() {
   );
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
+
+  // Fetch tenant config on mount
+  useEffect(() => {
+    fetchTenantConfig().then(setTenantConfig);
+  }, []);
+
+  const displayName = tenantConfig?.display_name ?? 'Corvus';
 
   // Apply theme to document
   useEffect(() => {
@@ -166,7 +175,7 @@ export default function App() {
       <aside className={`sidebar${collapsed ? ' sidebar-collapsed' : ''}`}>
         <div className="sidebar-header">
           <img src="/corvus-logo-128.png" alt="Corvus" className="sidebar-logo" onClick={() => setTab('home')} style={{ cursor: 'pointer' }} />
-          {!collapsed && <h1 className="app-title" onClick={() => setTab('home')} style={{ cursor: 'pointer' }}>Corvus Aero</h1>}
+          {!collapsed && <h1 className="app-title" onClick={() => setTab('home')} style={{ cursor: 'pointer' }}>{displayName}</h1>}
           <button
             className="sidebar-toggle"
             onClick={() => setCollapsed(c => !c)}

@@ -10,6 +10,7 @@ from fastapi import APIRouter, UploadFile, Form, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import select, func, text as sql_text
 
+from app.config import settings
 from app.database import async_session
 from app.models_corvus import (
     CorvusCapture, CorvusInterpretation, CorvusKnownApp, CorvusSession,
@@ -678,7 +679,7 @@ async def get_corvus_settings():
     """Return the current Corvus integration settings for Corvus."""
     return {
         "enabled": interpreter_mod.interpreter_state.ygg_enabled,
-        "url": "http://localhost:8002",
+        "url": f"http://localhost:{settings.port}",
         "project_path": interpreter_mod.interpreter_state.ygg_project_path,
         "enrich_mode": interpreter_mod.interpreter_state.ygg_enrich_mode,
     }
@@ -700,7 +701,7 @@ async def set_corvus_settings(
         interpreter_mod.interpreter_state.ygg_enrich_mode = enrich_mode
     return {
         "enabled": interpreter_mod.interpreter_state.ygg_enabled,
-        "url": "http://localhost:8002",
+        "url": f"http://localhost:{settings.port}",
         "project_path": interpreter_mod.interpreter_state.ygg_project_path,
         "enrich_mode": interpreter_mod.interpreter_state.ygg_enrich_mode,
     }

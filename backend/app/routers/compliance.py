@@ -16,6 +16,7 @@ _MAX_FILE_BYTES = 64 * 1024  # 64 KB cap
 
 from app.config import settings
 from app.database import get_db, async_session
+from app.tenant import tenant
 from app.models import ManagementReview, ComplianceSnapshot, EvidenceMapping, Neuron, NeuronRefinement, AuditLog
 from app.routers.admin import run_compliance_audit
 
@@ -33,7 +34,7 @@ async def get_system_banner():
     """
     return {
         "enabled": settings.system_use_banner_enabled,
-        "banner_text": settings.system_use_banner if settings.system_use_banner_enabled else "",
+        "banner_text": tenant.system_use_banner if settings.system_use_banner_enabled else "",
         "session_timeout_minutes": settings.session_timeout_minutes,
     }
 
