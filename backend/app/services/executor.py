@@ -180,7 +180,7 @@ def _build_neuron_score_dicts(
 
 async def prepare_context(
     db: AsyncSession, user_message: str, token_budget: int | None = None,
-    top_k: int | None = None, candidate_pool: int | None = None,
+    top_k: int | None = None,
     project_path: str | None = None, on_stage: StageCallback = None,
     prior_neuron_ids: list[int] | None = None,
 ) -> PreparedContext:
@@ -202,7 +202,7 @@ async def prepare_context(
     await _emit("structural_resolve", {"status": "skipped"})
 
     effective_top_k = top_k or settings.top_k_neurons
-    effective_pool = candidate_pool or settings.semantic_prefilter_top_n
+    effective_pool = settings.semantic_prefilter_top_n
     effective_budget = token_budget or settings.token_budget
     classify_result, query_embedding, intent, departments, role_keys, keywords = \
         await _embed_and_classify(user_message)
@@ -380,7 +380,6 @@ async def _run_neuron_pipeline(
     user_message: str,
     slot_specs: list[dict],
     max_top_k: int,
-    max_candidate_pool: int,
     on_stage: StageCallback,
     prior_neuron_ids: list[int] | None = None,
 ) -> tuple[PreparedContext | None, dict]:
@@ -395,7 +394,6 @@ async def _run_neuron_pipeline(
         db, user_message,
         token_budget=neuron_budget,
         top_k=max_top_k,
-        candidate_pool=max_candidate_pool,
         on_stage=on_stage,
         prior_neuron_ids=prior_neuron_ids,
     )
@@ -661,10 +659,9 @@ async def execute_query(
     slot_specs = _normalize_slot_specs(modes, token_budget, slots_v2)
     needs_neurons = any(s["mode"] in NEURON_MODES for s in slot_specs)
     max_top_k = _compute_neuron_slot_max(slot_specs, "top_k", settings.top_k_neurons)
-    max_candidate_pool = _compute_neuron_slot_max(slot_specs, "candidate_pool", settings.semantic_prefilter_top_n)
 
     ctx, classify_result = await _run_neuron_pipeline(
-        db, user_message, slot_specs, max_top_k, max_candidate_pool, on_stage,
+        db, user_message, slot_specs, max_top_k, on_stage,
         prior_neuron_ids=prior_neuron_ids,
     )
     intent = ctx.intent if ctx else "general_query"

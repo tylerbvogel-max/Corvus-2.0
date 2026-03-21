@@ -375,7 +375,6 @@ interface SlotConfig {
   mode: string;
   tokenBudget: number;
   topK: number;
-  candidatePool: number;
 }
 
 let nextSlotId = 1;
@@ -385,30 +384,24 @@ const TOKEN_MAX = 32000;
 const TOPK_MIN = 1;
 const TOPK_MAX = 500;
 
-const POOL_MIN = 50;
-const POOL_MAX = 2000;
-
-function XYPlot({ tokenBudget, topK, candidatePool, maxNeurons, onChange }: {
+function XYPlot({ tokenBudget, topK, maxNeurons, onChange }: {
   tokenBudget: number;
   topK: number;
-  candidatePool: number;
   maxNeurons: number;
-  onChange: (tokenBudget: number, topK: number, candidatePool: number) => void;
+  onChange: (tokenBudget: number, topK: number) => void;
 }) {
   const plotRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef<'topk' | 'pool' | null>(null);
+  const dragging = useRef<boolean>(false);
 
   const effectiveTopKMax = Math.min(maxNeurons, TOPK_MAX);
-  // Pool axis shares the Y space but uses a wider range
-  const yMax = Math.max(effectiveTopKMax, POOL_MAX);
 
   const yPctFromVal = useCallback((v: number) => {
-    return (1 - (v - TOPK_MIN) / (yMax - TOPK_MIN)) * 100;
-  }, [yMax]);
+    return (1 - (v - TOPK_MIN) / (effectiveTopKMax - TOPK_MIN)) * 100;
+  }, [effectiveTopKMax]);
 
   const yValFromPct = useCallback((yPct: number) => {
-    return Math.round(TOPK_MIN + (1 - yPct) * (yMax - TOPK_MIN));
-  }, [yMax]);
+    return Math.round(TOPK_MIN + (1 - yPct) * (effectiveTopKMax - TOPK_MIN));
+  }, [effectiveTopKMax]);
 
   const xPctFromVal = useCallback((tb: number) => {
     return ((tb - TOKEN_MIN) / (TOKEN_MAX - TOKEN_MIN)) * 100;
@@ -419,7 +412,6 @@ function XYPlot({ tokenBudget, topK, candidatePool, maxNeurons, onChange }: {
   }, []);
 
   const topKPct = yPctFromVal(topK);
-  const poolPct = yPctFromVal(candidatePool);
   const budgetPct = xPctFromVal(tokenBudget);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
@@ -427,46 +419,28 @@ function XYPlot({ tokenBudget, topK, candidatePool, maxNeurons, onChange }: {
     const rect = plotRef.current!.getBoundingClientRect();
     const yPct = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
     const xPct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const yVal = yValFromPct(yPct);
-    const xVal = xValFromPct(xPct);
-
-    if (dragging.current === 'topk') {
-      const newTopK = Math.max(TOPK_MIN, Math.min(effectiveTopKMax, yVal));
-      const newBudget = Math.max(TOKEN_MIN, Math.min(TOKEN_MAX, xVal));
-      // top_k can't exceed candidate_pool
-      onChange(newBudget, Math.min(newTopK, candidatePool), candidatePool);
-    } else if (dragging.current === 'pool') {
-      const newPool = Math.max(POOL_MIN, Math.min(POOL_MAX, yVal));
-      const newBudget = Math.max(TOKEN_MIN, Math.min(TOKEN_MAX, xVal));
-      // candidate_pool can't be less than top_k
-      onChange(newBudget, topK, Math.max(newPool, topK));
-    }
-  }, [yValFromPct, xValFromPct, effectiveTopKMax, candidatePool, topK, onChange]);
+    const newTopK = Math.max(TOPK_MIN, Math.min(effectiveTopKMax, yValFromPct(yPct)));
+    const newBudget = Math.max(TOKEN_MIN, Math.min(TOKEN_MAX, xValFromPct(xPct)));
+    onChange(newBudget, newTopK);
+  }, [yValFromPct, xValFromPct, effectiveTopKMax, onChange]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    const rect = plotRef.current!.getBoundingClientRect();
-    const yPct = (e.clientY - rect.top) / rect.height;
-
-    // Grab whichever dot is closer vertically
-    const topKYDist = Math.abs(yPct - topKPct / 100);
-    const poolYDist = Math.abs(yPct - poolPct / 100);
-    dragging.current = topKYDist <= poolYDist ? 'topk' : 'pool';
-
+    dragging.current = true;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     handlePointerMove(e);
-  }, [topKPct, poolPct, handlePointerMove]);
+  }, [handlePointerMove]);
 
   const onPointerUp = useCallback(() => {
-    dragging.current = null;
+    dragging.current = false;
   }, []);
 
   // Tick marks
   const xTicks = [1, 4, 8, 16, 32];
-  const yTicks = [1, 10, 30, 50, 100, 250, 500, 1000, POOL_MAX].filter((v, i, a) => a.indexOf(v) === i && v <= yMax);
+  const yTicks = [1, 10, 30, 50, 100, 250, 500].filter(v => v <= effectiveTopKMax);
 
   return (
     <div className="xy-plot-container">
-      <div className="xy-plot-ylabel">Neurons</div>
+      <div className="xy-plot-ylabel">Top-K</div>
       <div className="xy-plot-inner">
         <div className="xy-plot-yticks">
           {yTicks.map(v => {
@@ -490,30 +464,18 @@ function XYPlot({ tokenBudget, topK, candidatePool, maxNeurons, onChange }: {
             const top = yPctFromVal(v);
             return <div key={v} className="xy-gridline-h" style={{ top: `${top}%` }} />;
           })}
-          {/* Line connecting the two dots */}
-          <div className="xy-range-line" style={{
-            left: `${budgetPct}%`,
-            top: `${Math.min(topKPct, poolPct)}%`,
-            height: `${Math.abs(poolPct - topKPct)}%`,
-          }} />
-          {/* Crosshair for budget (horizontal from topK dot) */}
+          {/* Crosshairs */}
           <div className="xy-crosshair-h" style={{ top: `${topKPct}%` }} />
           <div className="xy-crosshair-v" style={{ left: `${budgetPct}%` }} />
-          {/* Pool dot (upper, larger pool) */}
-          <div
-            className="xy-dot xy-dot-pool"
-            style={{ left: `${budgetPct}%`, top: `${poolPct}%` }}
-            title="Candidate Pool"
-          />
-          {/* TopK dot (lower, active neurons) */}
+          {/* TopK dot */}
           <div
             className="xy-dot xy-dot-topk"
             style={{ left: `${budgetPct}%`, top: `${topKPct}%` }}
-            title="Top-K (max active)"
+            title="Top-K (max active neurons)"
           />
           {/* Value readout */}
           <div className="xy-readout">
-            {(tokenBudget / 1000).toFixed(0)}K &middot; K={topK} &middot; Pool={candidatePool}
+            {(tokenBudget / 1000).toFixed(0)}K &middot; K={topK}
           </div>
         </div>
         <div className="xy-plot-xticks">
@@ -534,7 +496,7 @@ function SlotBuilder({ slots, onChange, capacity }: {
   capacity: GraphCapacity | null;
 }) {
   function addSlot() {
-    onChange([...slots, { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 4000, topK: 30, candidatePool: 250 }]);
+    onChange([...slots, { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 4000, topK: 30 }]);
   }
 
   function removeSlot(id: number) {
@@ -587,9 +549,8 @@ function SlotBuilder({ slots, onChange, capacity }: {
                 <XYPlot
                   tokenBudget={slot.tokenBudget}
                   topK={slot.topK}
-                  candidatePool={slot.candidatePool}
                   maxNeurons={maxNeurons}
-                  onChange={(tb, tk, cp) => updateSlot(slot.id, { tokenBudget: tb, topK: tk, candidatePool: cp })}
+                  onChange={(tb, tk) => updateSlot(slot.id, { tokenBudget: tb, topK: tk })}
                 />
               ) : (
                 <div className="slot-raw-label">Raw mode — no neuron context</div>
@@ -785,7 +746,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [slotConfigs, setSlotConfigs] = useState<SlotConfig[]>([
-    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 4000, topK: 30, candidatePool: 250 },
+    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 4000, topK: 30 },
   ]);
   const [baseline, setBaseline] = useState('opus_raw');
   const [graphCapacity, setGraphCapacity] = useState<GraphCapacity | null>(null);
@@ -834,15 +795,11 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   }
 
   function buildSlotSpecs(): SlotSpec[] {
-    return slotConfigs.map(sc => {
-      const isNeuron = NEURON_MODES.has(sc.mode);
-      return {
-        mode: sc.mode,
-        token_budget: sc.tokenBudget,
-        top_k: sc.topK,
-        candidate_pool: isNeuron ? sc.candidatePool : undefined,
-      };
-    });
+    return slotConfigs.map(sc => ({
+      mode: sc.mode,
+      token_budget: sc.tokenBudget,
+      top_k: sc.topK,
+    }));
   }
 
   async function handleSubmit() {

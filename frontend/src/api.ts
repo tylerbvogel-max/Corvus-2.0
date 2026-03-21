@@ -253,7 +253,6 @@ export interface SlotSpec {
   mode: string;
   token_budget: number;
   top_k: number;
-  candidate_pool?: number;
   label?: string;
 }
 
