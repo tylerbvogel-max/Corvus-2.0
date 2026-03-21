@@ -201,6 +201,11 @@ async def prepare_context(
         return structural
     await _emit("structural_resolve", {"status": "skipped"})
 
+    # Ensure adjacency cache is loaded for spread activation
+    if settings.spread_enabled:
+        from app.services.adjacency_cache import ensure_adjacency_loaded
+        await ensure_adjacency_loaded(db)
+
     effective_top_k = top_k or settings.top_k_neurons
     effective_pool = settings.semantic_prefilter_top_n
     effective_budget = token_budget or settings.token_budget
@@ -777,14 +782,27 @@ async def _batch_update_edges(db: AsyncSession, neuron_ids: list[int], query_off
             "ON CONFLICT (source_id, target_id) DO NOTHING"
         ), {"src": src, "tgt": tgt})
 
-    # Batch update all pairs in one statement per pair
+    # Batch update all pairs — use RETURNING to get new weights without extra queries
+    updated_weights: list[float] = []
     for src, tgt in pairs:
-        await db.execute(text(
+        result = await db.execute(text(
             "UPDATE neuron_edges "
             "SET co_fire_count = co_fire_count + 1, "
             "    weight = LEAST(1.0, (co_fire_count + 1) / 20.0), "
             "    last_updated_query = :qoff, "
             "    source = CASE WHEN source = 'bootstrap' THEN 'organic' ELSE source END, "
             "    last_adjusted = now() "
-            "WHERE source_id = :src AND target_id = :tgt"
+            "WHERE source_id = :src AND target_id = :tgt "
+            "RETURNING weight"
         ), {"src": src, "tgt": tgt, "qoff": query_offset})
+        row = result.one_or_none()
+        updated_weights.append(float(row[0]) if row else 0.0)
+
+    # Incrementally update the adjacency cache
+    from app.services.adjacency_cache import is_adjacency_loaded, update_adjacency_incremental
+    if is_adjacency_loaded() and pairs:
+        update_adjacency_incremental(
+            pairs=list(pairs),
+            weights=updated_weights,
+            edge_types=["pyramidal"] * len(pairs),
+        )

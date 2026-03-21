@@ -53,6 +53,11 @@ async def reset_firings(db: AsyncSession = Depends(get_db)):
         neuron.is_active = True
 
     await db.commit()
+
+    # Invalidate caches since edges and firings were cleared
+    from app.services.adjacency_cache import invalidate_adjacency_cache
+    invalidate_adjacency_cache()
+
     return ResetResponse(status="reset_complete")
 
 
@@ -1124,6 +1129,10 @@ async def prune_edges(db: AsyncSession = Depends(get_db)):
     ), {"min_cofires": settings.edge_prune_min_cofires, "stale": max(0, stale_threshold)})
 
     await db.commit()
+
+    # Invalidate adjacency cache since edges were deleted
+    from app.services.adjacency_cache import invalidate_adjacency_cache
+    invalidate_adjacency_cache()
 
     after = (await db.execute(select(func.count()).select_from(NeuronEdge))).scalar() or 0
 

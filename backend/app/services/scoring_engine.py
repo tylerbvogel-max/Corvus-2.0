@@ -3,6 +3,8 @@
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 from app.config import settings
 
 
@@ -58,6 +60,44 @@ def calc_recency(queries_since_last: int) -> float:
     result = math.exp(-queries_since_last / settings.recency_decay_queries)
     assert 0.0 <= result <= 1.0, f"calc_recency result out of range: {result}"
     return result
+
+
+# --- Vectorized batch signal functions (numpy) ---
+# These mirror the scalar functions above but operate on entire arrays at once.
+# Used by _score_candidates_vectorized() in neuron_service.py for 10-50x speedup.
+
+
+def calc_burst_batch(fires_array: np.ndarray) -> np.ndarray:
+    """Vectorized burst: min(1, fires / threshold) for all candidates."""
+    return np.minimum(1.0, fires_array / settings.burst_threshold)
+
+
+def calc_impact_batch(utilities: np.ndarray) -> np.ndarray:
+    """Vectorized impact: clip avg_utility to [0, 1]."""
+    return np.clip(utilities, 0.0, 1.0)
+
+
+def calc_precision_batch(
+    dept_fires: np.ndarray, dept_totals: np.ndarray,
+) -> np.ndarray:
+    """Vectorized precision: dept_fires / dept_total, floor 0.3 if < 5 queries."""
+    result = np.where(
+        dept_totals >= 5,
+        np.minimum(1.0, dept_fires / np.maximum(dept_totals, 1)),
+        0.3,
+    )
+    return result
+
+
+def calc_novelty_batch(age_queries: np.ndarray) -> np.ndarray:
+    """Vectorized novelty: max(0, 1 - age / halflife)."""
+    return np.maximum(0.0, 1.0 - age_queries / settings.novelty_halflife_queries)
+
+
+def calc_recency_batch(queries_since: np.ndarray) -> np.ndarray:
+    """Vectorized recency: e^(-queries_since / decay)."""
+    safe_qs = np.maximum(queries_since, 0.0)
+    return np.exp(-safe_qs / settings.recency_decay_queries)
 
 
 _STOP_WORDS = frozenset({

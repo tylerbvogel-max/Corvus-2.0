@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     edge_prune_stale_queries: int = 100
     # Semantic pre-filter (replaces org-chart filtering)
     semantic_prefilter_enabled: bool = True
-    semantic_prefilter_top_n: int = 250
+    semantic_prefilter_top_n: int = 100_000
     semantic_prefilter_min_similarity: float = 0.10
     # Hybrid search: fuse keyword + semantic relevance via Reciprocal Rank Fusion
     hybrid_relevance_enabled: bool = True
