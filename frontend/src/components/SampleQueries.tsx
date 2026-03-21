@@ -4,7 +4,7 @@ import { fetchQueryRunCounts } from '../api';
 interface SampleQuery {
   text: string;
   complexity: 'low' | 'medium' | 'high';
-  suite: 'core' | 'x-plane' | 'proto-ready' | 'activation';
+  suite: 'core' | 'x-plane' | 'proto-ready' | 'activation' | 'eval-corpus';
   roles: string[];
 }
 
@@ -500,6 +500,73 @@ const SAMPLES: SampleQuery[] = [
     suite: 'activation',
     roles: ['Safety Officer', 'Proposal Manager', 'MIL-STD Series', 'Quality Manager', 'Systems Engineer'],
   },
+
+  // ═══════════════════════════════════════════════════════════════════
+  // EVAL CORPUS — investor demo & ROI validation queries
+  // 10 questions a real compliance analyst asks weekly.
+  // Run through Corvus AND raw Claude/GPT to produce side-by-side
+  // comparison for 1-pager proof points and live demo script.
+  // ═══════════════════════════════════════════════════════════════════
+  {
+    text: 'What are the key differences between FAR 52.225-25 and DFARS 252.225-7012 regarding foreign source restrictions, and when does each apply?',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Contracts Manager', 'FAR/DFARS Specialist'],
+  },
+  {
+    text: 'Our subcontract requires DFARS 252.204-7012 compliance. What specific controls do we need to implement for CUI protection, and how does this relate to CMMC Level 2?',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Contracts Manager', 'NIST/CMMC', 'IT Support Specialist'],
+  },
+  {
+    text: 'We\'re preparing for an AS9100 Rev D surveillance audit. What are the most commonly cited nonconformities in clause 8.5 (Production and Service Provision) and how should we prepare?',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Quality Manager', 'AS9100 Rev D'],
+  },
+  {
+    text: 'A supplier is NADCAP-accredited for special processes but their accreditation expires in 60 days. What are our obligations under AS9100 clause 8.4 for continued use of this supplier?',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Quality Manager', 'Supply Chain Manager', 'NADCAP', 'AS9100 Rev D'],
+  },
+  {
+    text: 'We\'re designing a composite structural component for a military aircraft. Which MIL-STDs govern composite material qualification and what testing requirements apply?',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Mechanical Engineer', 'Manufacturing Engineer', 'MIL-STD Series'],
+  },
+  {
+    text: 'We received a customer-reported nonconformity on a delivered part. Walk me through the corrective action process under AS9100 clause 10.2 including required documentation and timelines.',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Quality Manager', 'AS9100 Rev D', 'Program Manager'],
+  },
+  {
+    text: 'Our program is transitioning from EMD to LRIP. What contract modifications and compliance documentation need to be updated during this transition under FAR Part 15?',
+    complexity: 'high',
+    suite: 'eval-corpus',
+    roles: ['Program Manager', 'Contracts Manager', 'FAR/DFARS Specialist'],
+  },
+  {
+    text: 'We\'re implementing a new heat treatment process for titanium alloys. What NADCAP and AMS requirements apply, and what documentation do we need before production use?',
+    complexity: 'medium',
+    suite: 'eval-corpus',
+    roles: ['Manufacturing Engineer', 'Quality Manager', 'NADCAP'],
+  },
+  {
+    text: 'DCAA is scheduling an incurred cost audit. What are the most common findings in labor charging and how should we prepare our timekeeping system documentation?',
+    complexity: 'high',
+    suite: 'eval-corpus',
+    roles: ['Cost Accountant', 'Chief Financial Officer', 'FAR/DFARS Specialist'],
+  },
+  {
+    text: 'We just received a new ITAR-controlled technical data package from our prime. What are our obligations for marking, storage, access control, and re-export under ITAR §120-130, and how does this interact with our AS9100 document control procedures?',
+    complexity: 'high',
+    suite: 'eval-corpus',
+    roles: ['Export Control Officer', 'Quality Manager', 'ITAR/EAR Export Controls', 'AS9100 Rev D'],
+  },
 ];
 
 const COMPLEXITY_COLORS: Record<string, string> = {
@@ -513,11 +580,12 @@ const SUITE_CONFIG: Record<string, { label: string; color: string }> = {
   'x-plane': { label: 'X-Plane Backtest', color: '#c084fc' },
   'proto-ready': { label: 'Prototype Readiness', color: '#34d399' },
   activation: { label: 'Neuron Activation', color: '#fb7185' },
+  'eval-corpus': { label: 'Eval Corpus', color: '#facc15' },
 };
 
 export default function SampleQueries() {
   const [complexityFilter, setComplexityFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all');
-  const [suiteFilter, setSuiteFilter] = useState<'all' | 'core' | 'x-plane' | 'proto-ready' | 'activation'>('all');
+  const [suiteFilter, setSuiteFilter] = useState<'all' | 'core' | 'x-plane' | 'proto-ready' | 'activation' | 'eval-corpus'>('all');
   const [copied, setCopied] = useState<number | null>(null);
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
 
@@ -547,6 +615,8 @@ export default function SampleQueries() {
     core: SAMPLES.filter(s => s.suite === 'core').length,
     'x-plane': SAMPLES.filter(s => s.suite === 'x-plane').length,
     'proto-ready': SAMPLES.filter(s => s.suite === 'proto-ready').length,
+    activation: SAMPLES.filter(s => s.suite === 'activation').length,
+    'eval-corpus': SAMPLES.filter(s => s.suite === 'eval-corpus').length,
   };
 
   return (
@@ -559,7 +629,7 @@ export default function SampleQueries() {
       {/* Suite filter */}
       <div className="sample-filter-bar">
         <span style={{ color: '#888', fontSize: '0.8rem', marginRight: 4 }}>Suite:</span>
-        {(['all', 'core', 'x-plane', 'proto-ready'] as const).map(suite => (
+        {(['all', 'eval-corpus', 'core', 'x-plane', 'proto-ready', 'activation'] as const).map(suite => (
           <button
             key={suite}
             className={`sample-filter-btn${suiteFilter === suite ? ' active' : ''}`}
