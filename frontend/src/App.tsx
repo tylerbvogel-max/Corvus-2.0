@@ -29,8 +29,8 @@ import ComplianceDashboard from './components/ComplianceDashboard'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
-import { fetchTenantConfig } from './config'
-import type { TenantConfig } from './config'
+import { fetchTenantConfig, fetchAllTenants } from './config'
+import type { TenantConfig, TenantSummary } from './config'
 
 type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations';
 
@@ -134,13 +134,16 @@ export default function App() {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
+  const [allTenants, setAllTenants] = useState<TenantSummary[]>([]);
 
-  // Fetch tenant config on mount
+  // Fetch tenant config + all tenants on mount
   useEffect(() => {
     fetchTenantConfig().then(setTenantConfig);
+    fetchAllTenants().then(setAllTenants);
   }, []);
 
   const displayName = tenantConfig?.display_name ?? 'Corvus';
+  const otherTenants = allTenants.filter(t => t.tenant_id !== tenantConfig?.tenant_id);
 
   // Apply theme to document
   useEffect(() => {
@@ -185,6 +188,20 @@ export default function App() {
             {collapsed ? '\u25B6' : '\u25C0'}
           </button>
         </div>
+        {!collapsed && otherTenants.length > 0 && (
+          <div className="tenant-switcher">
+            {otherTenants.map(t => (
+              <a
+                key={t.tenant_id}
+                href={t.default_port ? `http://localhost:${t.default_port}` : '#'}
+                className="tenant-switcher-link"
+                title={`Switch to ${t.display_name}`}
+              >
+                {t.display_name} &rarr;
+              </a>
+            ))}
+          </div>
+        )}
         {!collapsed && (
           <nav className="sidebar-nav">
             {NAV_GROUPS.map(group => (

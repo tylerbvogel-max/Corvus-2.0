@@ -6,7 +6,14 @@ export interface TenantConfig {
   description: string;
 }
 
+export interface TenantSummary {
+  tenant_id: string;
+  display_name: string;
+  default_port: number | null;
+}
+
 let _cached: TenantConfig | null = null;
+let _allCached: TenantSummary[] | null = null;
 
 export async function fetchTenantConfig(): Promise<TenantConfig> {
   if (_cached) return _cached;
@@ -25,6 +32,21 @@ export async function fetchTenantConfig(): Promise<TenantConfig> {
     description: 'Biomimetic neuron graph for aerospace defense prompt preparation.',
   };
   return _cached;
+}
+
+export async function fetchAllTenants(): Promise<TenantSummary[]> {
+  if (_allCached) return _allCached;
+  try {
+    const resp = await fetch('/tenants');
+    if (resp.ok) {
+      _allCached = await resp.json();
+      return _allCached!;
+    }
+  } catch {
+    // Fallback
+  }
+  _allCached = [];
+  return _allCached;
 }
 
 export function getTenantConfig(): TenantConfig | null {

@@ -1,4 +1,5 @@
 display_name: "Corvus Flow"
+default_port: 8003
 description: "Plumbing trade knowledge codification engine. Two-stage Haiku pipeline with 5-signal neuron scoring."
 system_use_banner: >-
   Corvus Flow — Trade Knowledge Codification Engine.

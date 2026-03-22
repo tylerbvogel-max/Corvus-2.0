@@ -604,6 +604,27 @@ async def get_tenant():
     }
 
 
+@app.get("/tenants")
+async def list_tenants():
+    """Return all available tenants with their default URLs."""
+    import yaml as _yaml
+
+    tenants_dir = Path(__file__).resolve().parent.parent / "tenants"
+    result = []
+    for td in sorted(tenants_dir.iterdir()):
+        yaml_path = td / "tenant.yaml"
+        if not td.is_dir() or not yaml_path.exists():
+            continue
+        with open(yaml_path) as f:
+            cfg = _yaml.safe_load(f)
+        result.append({
+            "tenant_id": td.name,
+            "display_name": cfg.get("display_name", td.name),
+            "default_port": cfg.get("default_port"),
+        })
+    return result
+
+
 @app.get("/health")
 async def health():
     """Return system health status with neuron count and total queries."""
@@ -627,7 +648,7 @@ if frontend_dist.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
     # SPA catch-all — must NOT match API prefixes
-    _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/tenant", "/docs", "/openapi", "/ingest", "/corvus")
+    _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/tenant", "/tenants", "/docs", "/openapi", "/ingest", "/corvus")
 
     def _is_api_path(path: str) -> bool:
         return bool(path) and any(path.startswith(p.lstrip("/")) for p in _api_prefixes)

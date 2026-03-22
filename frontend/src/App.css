@@ -240,6 +240,25 @@ body {
 }
 .sidebar-toggle:hover { color: var(--text); background: var(--bg-input); }
 
+.tenant-switcher {
+  padding: 4px 12px 6px;
+  border-bottom: 1px solid var(--border, #333);
+}
+.tenant-switcher-link {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  text-decoration: none;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #444);
+  transition: color 0.15s, border-color 0.15s;
+}
+.tenant-switcher-link:hover {
+  color: var(--text, #eee);
+  border-color: var(--text-muted, #888);
+}
+
 .sidebar-nav {
   flex: 1;
   padding: 6px 0;
