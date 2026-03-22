@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import Explorer from './components/Explorer'
 import Dashboard from './components/Dashboard'
 import QueryLab from './components/QueryLab'
@@ -29,7 +29,8 @@ import ComplianceDashboard from './components/ComplianceDashboard'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
-import { fetchTenantConfig, TenantConfig } from './config'
+import { fetchTenantConfig } from './config'
+import type { TenantConfig } from './config'
 
 type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations';
 
