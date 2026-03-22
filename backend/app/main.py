@@ -456,7 +456,7 @@ async def _seed_core_data():
     # Seed regulatory department — force re-seed if neuron count below v2 threshold
     async with async_session() as db:
         rcount = (await db.execute(
-            select(func.count(Neuron.id)).where(Neuron.department == "Regulatory")
+            select(func.count(Neuron.id)).where(Neuron.department == tenant.regulatory_department_name)
         )).scalar() or 0
         force_reseed = rcount < tenant.reseed_threshold
         if force_reseed:
@@ -629,13 +629,17 @@ if frontend_dist.exists():
     # SPA catch-all — must NOT match API prefixes
     _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/tenant", "/docs", "/openapi", "/ingest", "/corvus")
 
+    def _is_api_path(path: str) -> bool:
+        return bool(path) and any(path.startswith(p.lstrip("/")) for p in _api_prefixes)
+
     @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
+    async def serve_spa(request: Request, full_path: str):
         """Serve the SPA frontend, falling back to index.html for client-side routes."""
-        # Check if it's a real static file first (before API prefix check)
+        # Never intercept API paths — let them 404 naturally
+        if _is_api_path(full_path):
+            raise HTTPException(status_code=404, detail="Not found")
+        # Serve real static files
         file_path = frontend_dist / full_path
         if full_path and file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
-        if full_path and any(full_path.startswith(p.lstrip("/")) for p in _api_prefixes):
-            raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(str(frontend_dist / "index.html"))

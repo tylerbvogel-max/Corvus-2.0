@@ -7,4 +7,4 @@ system_use_banner: >-
   Content is reference-only and does not replace licensed professional judgment.
 semantic_prefilter_enabled: false
 regulatory_department_name: "Code Compliance"
-reseed_threshold: 150
+reseed_threshold: 40
