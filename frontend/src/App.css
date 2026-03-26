@@ -195,15 +195,18 @@ body {
   justify-content: space-between;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  min-height: 44px;
+  height: 48px;
+  box-sizing: border-box;
 }
 
 .sidebar-collapsed .sidebar-header {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 8px 4px;
-  gap: 4px;
+  padding: 4px;
+  gap: 2px;
+  height: 48px;
+  box-sizing: border-box;
 }
 
 .sidebar-logo {
@@ -761,7 +764,7 @@ body {
   min-width: 300px;
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  padding: 12px 0;
+  padding: 0;
   transition: width 0.2s, min-width 0.2s;
 }
 
@@ -775,11 +778,13 @@ body {
   font-size: 0.8125rem;
   color: var(--text-dim);
   text-transform: uppercase;
-  padding: 0 12px 8px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 4px;
+  margin: 0 0 4px;
   display: flex;
   align-items: center;
+  height: 48px;
+  box-sizing: border-box;
   gap: 6px;
   user-select: none;
 }
@@ -808,21 +813,40 @@ body {
 .history-item.pending { opacity: 0.7; border-left: 2px solid var(--text-dim); animation: pending-pulse 1.5s ease-in-out infinite; }
 @keyframes pending-pulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 0.4; } }
 
+.history-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.history-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  color: var(--accent, #60a5fa);
+  font-weight: 600;
+}
+
 .history-msg {
-  font-size: 0.8125rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text);
   margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .history-meta {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .history-cost {
+  font-family: var(--font-mono, monospace);
   font-size: 0.6875rem;
   color: var(--text-dim);
 }
@@ -995,6 +1019,61 @@ body {
   line-height: 1.7;
   white-space: pre-wrap;
 }
+.response-text.markdown-body {
+  white-space: normal;
+}
+.response-text.markdown-body h1,
+.response-text.markdown-body h2,
+.response-text.markdown-body h3,
+.response-text.markdown-body h4 {
+  color: var(--text);
+  margin: 1em 0 0.4em;
+  font-weight: 600;
+}
+.response-text.markdown-body h1 { font-size: 1.1rem; }
+.response-text.markdown-body h2 { font-size: 1rem; }
+.response-text.markdown-body h3 { font-size: 0.95rem; }
+.response-text.markdown-body p { margin: 0.5em 0; }
+.response-text.markdown-body ul,
+.response-text.markdown-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.response-text.markdown-body li { margin: 0.25em 0; }
+.response-text.markdown-body strong { color: var(--text); font-weight: 600; }
+.response-text.markdown-body code {
+  background: var(--bg-card);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.82em;
+  font-family: var(--font-mono, monospace);
+}
+.response-text.markdown-body pre {
+  background: var(--bg-card);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.response-text.markdown-body pre code { background: none; padding: 0; }
+.response-text.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.82rem;
+}
+.response-text.markdown-body th,
+.response-text.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.response-text.markdown-body th { background: var(--bg-card); font-weight: 600; }
+.response-text.markdown-body blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0.5em 0;
+  padding: 0.25em 1em;
+  color: var(--text-dim);
+}
 .copy-btn {
   position: absolute;
   top: 8px;
@@ -1064,8 +1143,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 600px;
-  overflow: hidden;
+  max-height: 2000px;
+  overflow: visible;
   transition: max-height 0.3s ease, opacity 0.3s ease;
   opacity: 1;
 }
@@ -1184,6 +1263,7 @@ body {
   align-items: center;
   gap: 2px;
   user-select: none;
+  position: relative;
 }
 
 .xy-plot-ylabel {
@@ -1196,6 +1276,24 @@ body {
   left: -2px;
   top: 50%;
   translate: 0 -50%;
+}
+
+.xy-dot-output {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fb923c;
+  border: 2px solid #fb923c;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  z-index: 3;
+  box-shadow: 0 0 6px #fb923c88;
+}
+
+.xy-crosshair-output {
+  border-left: 1px dashed #fb923c66 !important;
+  border-color: #fb923c66 !important;
 }
 
 .xy-plot-xlabel {
@@ -1573,7 +1671,7 @@ body {
 }
 
 /* Eval compare card */
-.cost-savings { margin-top: 16px; padding: 12px 16px; background: #0d1520; border: 1px solid #1a3a2a; border-radius: 8px; }
+.cost-savings { margin-top: 16px; padding: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
 .cost-savings-title { font-size: 0.85rem; font-weight: 700; color: #22c55e; margin-bottom: 10px; }
 .cost-savings-rows { display: flex; flex-direction: column; gap: 8px; }
 .cost-savings-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1586,7 +1684,7 @@ body {
 .cost-savings-amount { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .cost-savings-saved { font-weight: 700; color: #22c55e; font-size: 0.85rem; }
 .cost-savings-pct { font-size: 0.75rem; color: #86efac; }
-.cost-savings-total-row { border-top: 1px solid #1e2d4a; padding-top: 8px; margin-top: 4px; }
+.cost-savings-total-row { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 .eval-card { border-color: var(--layer2); }
 .eval-score-table { margin: 12px 0; }
 .eval-score-table .score-table th { text-align: center; font-size: 0.8rem; padding: 6px 12px; }
@@ -4308,3 +4406,171 @@ details summary:hover { color: var(--text); }
   font-weight: 600;
   text-transform: capitalize;
 }
+
+/* ────────── Unified Graph ────────── */
+
+/* Controls bar */
+.unified-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.qlt-mode-select {
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-input, var(--bg-card));
+  color: var(--text);
+  min-width: 160px;
+}
+
+/* Model legend pills */
+.model-legend {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1.5px solid;
+  background: var(--bg-card);
+  white-space: nowrap;
+}
+
+.model-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.model-pill-detail {
+  font-weight: 400;
+  opacity: 0.7;
+  font-size: 0.65rem;
+}
+
+.model-pill-remove {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.model-pill-remove:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.model-pill-remove:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+/* Unified plot dots (HTML, not SVG — avoids warping) */
+.uplot-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.3);
+}
+
+.uplot-dot-sm {
+  width: 10px;
+  height: 10px;
+}
+
+/* Rotated label along the line */
+.uplot-label {
+  position: absolute;
+  font-size: 0.6rem;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 4;
+  text-shadow: 0 0 4px var(--bg), 0 0 4px var(--bg), 0 0 6px var(--bg);
+}
+
+/* Selected pill glow */
+.model-pill-selected {
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* Graph + raw models row */
+.unified-graph-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 8px;
+}
+
+.unified-graph-row .xy-plot-container {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Raw models column beside graph */
+.raw-models-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 120px;
+  padding-top: 16px;
+}
+
+.raw-models-header {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.raw-model-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1.5px solid;
+  background: var(--bg-card);
+  white-space: nowrap;
+}
+
+/* Output level label */
+.unified-output-label {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 1;
+}
+

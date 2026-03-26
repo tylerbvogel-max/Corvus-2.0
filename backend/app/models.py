@@ -283,6 +283,26 @@ class PropagationLog(Base):
     )
 
 
+class SynapticLearningEvent(Base):
+    __tablename__ = "synaptic_learning_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    query_id: Mapped[int] = mapped_column(Integer, ForeignKey("queries.id"), nullable=False, index=True)
+    neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "reward" | "penalty"
+    old_avg_utility: Mapped[float] = mapped_column(Float, nullable=False)
+    new_avg_utility: Mapped[float] = mapped_column(Float, nullable=False)
+    delta: Mapped[float] = mapped_column(Float, nullable=False)
+    effective_delta: Mapped[float] = mapped_column(Float, nullable=False)
+    combined_score: Mapped[float] = mapped_column(Float, nullable=False)
+    attribution_weight: Mapped[float] = mapped_column(Float, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(10), nullable=False)  # "win" | "loss"
+    winner_mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
 class SystemAlert(Base):
     __tablename__ = "system_alerts"
 

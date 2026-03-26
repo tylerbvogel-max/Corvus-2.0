@@ -4,13 +4,15 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str  # Required — set via DATABASE_URL env var or .env file
     anthropic_api_key: str = ""
+    google_api_key: str = ""
+    groq_api_key: str = ""
     port: int = 8002
     tenant_id: str = "corvus-aero"
     cors_origins: str = ""  # Comma-separated; empty = auto from port
     haiku_model: str = "claude-haiku-4-5-20251001"
-    token_budget: int = 4000
+    token_budget: int = 8000
     propagation_decay: float = 0.6
-    top_k_neurons: int = 30
+    top_k_neurons: int = 60
     # Scoring weights (6 signals, sum = 1.0)
     # Relevance = stimulus specificity (primary driver)
     # Impact = long-term potentiation (proven utility)
@@ -83,6 +85,12 @@ class Settings(BaseSettings):
     # System use notification banner (AC-8, CMMC 3.1.9)
     # Banner text is loaded from tenant config (tenant.system_use_banner)
     system_use_banner_enabled: bool = True
+    # Synaptic learning (eval-driven automatic weight adjustment)
+    synaptic_learning_enabled: bool = True
+    outcome_learning_alpha: float = 0.05
+    outcome_loss_penalty: float = 0.3
+    outcome_win_cofire_multiplier: int = 2
+    outcome_loss_cofire_multiplier: int = 0
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

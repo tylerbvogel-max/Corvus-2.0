@@ -7,6 +7,7 @@ import {
   type SessionSummary,
 } from '../api';
 import type { NeuronScoreResponse } from '../types';
+import { useModels } from '../hooks/useModels';
 import ChatPipeline from './ChatPipeline';
 import ConversationGraph from './ConversationGraph';
 
@@ -82,8 +83,9 @@ export default function HomePage({ onNavigate }: { onNavigate: (tab: string) => 
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const [model, setModel] = useState<'haiku' | 'sonnet' | 'opus'>('haiku');
+  const [model, setModel] = useState('haiku');
   const [useNeurons, setUseNeurons] = useState(true);
+  const { grouped: groupedModels } = useModels();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -372,11 +374,18 @@ export default function HomePage({ onNavigate }: { onNavigate: (tab: string) => 
               <select
                 className="home-model-select"
                 value={model}
-                onChange={e => setModel(e.target.value as 'haiku' | 'sonnet' | 'opus')}
+                onChange={e => setModel(e.target.value)}
               >
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
+                {Object.entries(groupedModels).map(([group, models]) => (
+                  [
+                    <option key={`hdr-${group}`} disabled style={{ fontWeight: 'bold' }}>── {group} ──</option>,
+                    ...models.map(m => (
+                      <option key={m.display_name} value={m.display_name}>
+                        {m.display_name}
+                      </option>
+                    )),
+                  ]
+                ))}
               </select>
               <button
                 className={`home-neuron-pill${useNeurons ? ' home-neuron-pill--active' : ''}`}
@@ -425,11 +434,18 @@ export default function HomePage({ onNavigate }: { onNavigate: (tab: string) => 
             <select
               className="home-model-select"
               value={model}
-              onChange={e => setModel(e.target.value as 'haiku' | 'sonnet' | 'opus')}
+              onChange={e => setModel(e.target.value)}
             >
-              <option value="haiku">Haiku</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus</option>
+              {Object.entries(groupedModels).map(([group, models]) => (
+                [
+                  <option key={`hdr-${group}`} disabled style={{ fontWeight: 'bold' }}>── {group} ──</option>,
+                  ...models.map(m => (
+                    <option key={m.display_name} value={m.display_name}>
+                      {m.display_name}
+                    </option>
+                  )),
+                ]
+              ))}
             </select>
             <button
               className={`home-neuron-pill${useNeurons ? ' home-neuron-pill--active' : ''}`}

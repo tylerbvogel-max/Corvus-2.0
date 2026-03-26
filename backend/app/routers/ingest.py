@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Neuron, NeuronEdge, NeuronRefinement, ObservationQueue
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat
 from app.schemas import ObservationEvalRequest, ObservationBatchEvalRequest, ObservationApplyRequest
 from app.services.reference_hooks import populate_external_references
 
@@ -530,7 +530,7 @@ async def evaluate_observation(
         f"{nearby_context}"
     )
 
-    result = await claude_chat(
+    result = await llm_chat(
         system_prompt=_EVAL_SYSTEM_PROMPT,
         user_message=user_message,
         max_tokens=4096,

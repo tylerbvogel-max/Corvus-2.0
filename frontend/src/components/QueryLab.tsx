@@ -1,37 +1,64 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from 'react'
 import { submitQueryStream, submitRating, fetchQueryHistory, fetchQueryDetail, evaluateQuery, refineQuery, applyRefinements, fetchGraphCapacity } from '../api'
-import type { SlotSpec, GraphCapacity, StageEvent } from '../api'
+import type { SlotSpec, GraphCapacity, StageEvent, ModelOption } from '../api'
 import type { QueryResponse, QuerySummary, QueryDetail, SlotResult, EvalScoreOut, RefineResponse } from '../types'
+import { useModels } from '../hooks/useModels'
 import TokenCharts from './TokenCharts'
 import SpreadTrail from './SpreadTrail'
 import ChatNeuronViz from './ChatNeuronViz'
+import { marked } from 'marked'
 
 const layerColors = ['var(--layer0)', 'var(--layer1)', 'var(--layer2)', 'var(--layer3)', 'var(--layer4)', 'var(--layer5)'];
 
-const ALL_MODES = [
-  { key: 'haiku_neuron', label: 'Haiku + Neurons', short: 'HN' },
-  { key: 'haiku_raw', label: 'Haiku Raw', short: 'H' },
-  { key: 'sonnet_neuron', label: 'Sonnet + Neurons', short: 'SN' },
-  { key: 'sonnet_raw', label: 'Sonnet Raw', short: 'S' },
-  { key: 'opus_neuron', label: 'Opus + Neurons', short: 'ON' },
-  { key: 'opus_raw', label: 'Opus Raw', short: 'O' },
-] as const;
+// Configure marked for LLM response rendering
+marked.setOptions({ breaks: true, gfm: true });
 
-const NEURON_MODES = new Set(['haiku_neuron', 'sonnet_neuron', 'opus_neuron']);
-
-const MODE_COLORS: Record<string, string> = {
-  haiku_neuron: '#60a5fa',
-  haiku_raw: '#38bdf8',
-  sonnet_neuron: '#a78bfa',
-  sonnet_raw: '#c084fc',
-  opus_neuron: '#fb7185',
-  opus_raw: '#f472b6',
+// Provider color palette for dynamic mode coloring
+const PROVIDER_COLORS: Record<string, [string, string]> = {
+  google: ['#34d399', '#6ee7b7'],
+  groq: ['#fbbf24', '#fcd34d'],
+  anthropic: ['#60a5fa', '#a78bfa'],
 };
+
+function buildAllModes(models: ModelOption[]) {
+  return models.flatMap(m => [
+    { key: `${m.display_name}_neuron`, label: `${m.display_name} + Neurons`, short: m.display_name.slice(0, 3).toUpperCase() + 'N' },
+    { key: `${m.display_name}_raw`, label: `${m.display_name} Raw`, short: m.display_name.slice(0, 3).toUpperCase() },
+  ]);
+}
+
+function buildModeColors(models: ModelOption[]): Record<string, string> {
+  const colors: Record<string, string> = {};
+  for (const m of models) {
+    const [neuronColor, rawColor] = PROVIDER_COLORS[m.provider] ?? ['#c8d0dc', '#d1d8e0'];
+    colors[`${m.display_name}_neuron`] = neuronColor;
+    colors[`${m.display_name}_raw`] = rawColor;
+  }
+  return colors;
+}
+
+
+// Module-level helpers for sub-components that can't access hook state
+function getModeColor(mode: string, colorsOverride?: Record<string, string>): string {
+  if (colorsOverride && colorsOverride[mode]) return colorsOverride[mode];
+  // Derive a stable color from the mode name for unknown modes
+  let hash = 0;
+  for (let i = 0; i < mode.length; i++) hash = ((hash << 5) - hash + mode.charCodeAt(i)) | 0;
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 60%, 65%)`;
+}
+
+function getModeLabel(mode: string): string {
+  // Derive human-readable label from mode key
+  const [model, type] = mode.split('_');
+  if (!type) return mode;
+  return type === 'neuron' ? `${model} + Neurons` : `${model} Raw`;
+}
 
 // Generate distinct hex colors for same-mode slots at different budgets
 // Must produce valid hex for Chart.js canvas (CSS color-mix doesn't work in canvas)
-function slotColor(mode: string, index: number, total: number): string {
-  const base = MODE_COLORS[mode] ?? '#c8d0dc';
+function slotColor(mode: string, index: number, total: number, colors: Record<string, string>): string {
+  const base = colors[mode] ?? '#c8d0dc';
   if (total <= 1) return base;
   // Parse hex to RGB, shift lightness per index
   const r = parseInt(base.slice(1, 3), 16);
@@ -42,12 +69,15 @@ function slotColor(mode: string, index: number, total: number): string {
   return `#${clamp(r).toString(16).padStart(2, '0')}${clamp(g).toString(16).padStart(2, '0')}${clamp(b).toString(16).padStart(2, '0')}`;
 }
 
-function slotDisplayLabel(slot: SlotResult): string {
-  const m = ALL_MODES.find(m => m.key === slot.mode);
-  return m?.label ?? slot.mode;
+function slotDisplayLabel(slot: SlotResult, allModes?: { key: string; label: string }[]): string {
+  if (allModes) {
+    const m = allModes.find(m => m.key === slot.mode);
+    if (m) return m.label;
+  }
+  return getModeLabel(slot.mode);
 }
 
-function slotsToChartModels(slots: SlotResult[], classifyCost: number, baseline: string) {
+function slotsToChartModels(slots: SlotResult[], classifyCost: number, baseline: string, colors?: Record<string, string>, allModes?: { key: string; label: string }[]) {
   const models = [];
   let firstNeuronDone = false;
   for (let i = 0; i < slots.length; i++) {
@@ -58,9 +88,9 @@ function slotsToChartModels(slots: SlotResult[], classifyCost: number, baseline:
     const sameModeBefore = slots.slice(0, i).filter(s => s.mode === slot.mode).length;
     const sameModeTotal = slots.filter(s => s.mode === slot.mode).length;
     models.push({
-      label: slotDisplayLabel(slot),
+      label: slotDisplayLabel(slot, allModes),
       mode: slot.mode,
-      color: sameModeTotal > 1 ? slotColor(slot.mode, sameModeBefore, sameModeTotal) : (MODE_COLORS[slot.mode] ?? '#c8d0dc'),
+      color: sameModeTotal > 1 ? slotColor(slot.mode, sameModeBefore, sameModeTotal, colors ?? {}) : getModeColor(slot.mode, colors),
       inputTokens: slot.input_tokens,
       outputTokens: slot.output_tokens,
       cost: slot.cost_usd + (isFirstNeuron ? classifyCost : 0),
@@ -116,9 +146,9 @@ function EvalScoreTable({ scores, winner, slots }: { scores: EvalScoreOut[]; win
               // Match by position (A=0, B=1, ...) not by mode, since multiple slots can share a mode
               const slotIndex = s.answer_label.charCodeAt(0) - 65;
               const matchedSlot = slots?.[slotIndex];
-              const displayLabel = matchedSlot ? slotDisplayLabel(matchedSlot) : (ALL_MODES.find(m => m.key === s.answer_mode)?.label ?? s.answer_mode);
+              const displayLabel = matchedSlot ? slotDisplayLabel(matchedSlot) : getModeLabel(s.answer_mode);
               return (
-                <th key={s.answer_label} style={{ borderBottom: `2px solid ${MODE_COLORS[s.answer_mode] ?? '#c8d0dc'}` }}>
+                <th key={s.answer_label} style={{ borderBottom: `2px solid ${getModeColor(s.answer_mode)}` }}>
                   {s.answer_label} — {displayLabel}
                   {winner === s.answer_label && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: '#22c55e' }}>&#9733; Winner</span>}
                 </th>
@@ -154,7 +184,8 @@ function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, 
   initialRefineResult?: RefineResponse | null;
   onNavigateToNeuron?: (id: number) => void;
 }) {
-  const [refineModel, setRefineModel] = useState<'haiku' | 'sonnet' | 'opus'>('haiku');
+  const { models: availableModels } = useModels();
+  const [refineModel, setRefineModel] = useState<string>('haiku');
   const [refineMaxTokens, setRefineMaxTokens] = useState(4096);
   const [refineLoading, setRefineLoading] = useState(false);
   const [refineResult, setRefineResult] = useState<RefineResponse | null>(null);
@@ -237,10 +268,10 @@ function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, 
       <div className="eval-header">
         <h3>Refine Neurons</h3>
         <div className="eval-controls">
-          <select value={refineModel} onChange={e => setRefineModel(e.target.value as 'haiku' | 'sonnet' | 'opus')}>
-            <option value="haiku">Refine with Haiku</option>
-            <option value="sonnet">Refine with Sonnet</option>
-            <option value="opus">Refine with Opus</option>
+          <select value={refineModel} onChange={e => setRefineModel(e.target.value)}>
+            {availableModels.map(m => (
+              <option key={m.display_name} value={m.display_name}>Refine with {m.display_name}</option>
+            ))}
           </select>
           <label className="refine-token-slider">
             <span>Max tokens: {refineMaxTokens >= 1000 ? `${(refineMaxTokens / 1000).toFixed(1).replace(/\.0$/, '')}K` : refineMaxTokens}</span>
@@ -368,13 +399,15 @@ function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, 
   );
 }
 
-// ────────── Slot Builder ──────────
+// ────────── Unified Slot Builder ──────────
 
 interface SlotConfig {
   id: number;
   mode: string;
   tokenBudget: number;
   topK: number;
+  maxOutputTokens: number;
+  color: string;
 }
 
 let nextSlotId = 1;
@@ -383,15 +416,33 @@ const TOKEN_MIN = 1000;
 const TOKEN_MAX = 32000;
 const TOPK_MIN = 1;
 const TOPK_MAX = 500;
+const OUTPUT_MIN = 512;
+const OUTPUT_MAX = 8192;
+const OUTPUT_Y_PCT = 90;
+const PLOT_ASPECT = 2;
 
-function XYPlot({ tokenBudget, topK, maxNeurons, onChange }: {
-  tokenBudget: number;
-  topK: number;
+const SLOT_PALETTE = [
+  '#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa',
+  '#fb923c', '#22d3ee', '#e879f9', '#84cc16', '#f87171',
+  '#2dd4bf', '#818cf8',
+];
+let nextSlotColorIdx = 0;
+function nextSlotColor(): string {
+  const c = SLOT_PALETTE[nextSlotColorIdx % SLOT_PALETTE.length];
+  nextSlotColorIdx++;
+  return c;
+}
+
+function UnifiedPlot({ slots, maxNeurons, selectedId, onSelect, onUpdateSlot }: {
+  slots: SlotConfig[];
   maxNeurons: number;
-  onChange: (tokenBudget: number, topK: number) => void;
+  selectedId: number | null;
+  onSelect: (id: number | null) => void;
+  onUpdateSlot: (id: number, patch: Partial<SlotConfig>) => void;
 }) {
   const plotRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef<boolean>(false);
+  const dragTarget = useRef<{ type: 'input' | 'output'; modelId: number } | null>(null);
+  const neuronSlots = slots.filter(s => !s.mode.endsWith('_raw'));
 
   const effectiveTopKMax = Math.min(maxNeurons, TOPK_MAX);
 
@@ -403,40 +454,93 @@ function XYPlot({ tokenBudget, topK, maxNeurons, onChange }: {
     return Math.round(TOPK_MIN + (1 - yPct) * (effectiveTopKMax - TOPK_MIN));
   }, [effectiveTopKMax]);
 
-  const xPctFromVal = useCallback((tb: number) => {
-    return ((tb - TOKEN_MIN) / (TOKEN_MAX - TOKEN_MIN)) * 100;
+  const xPctFromVal = useCallback((v: number) => {
+    return ((v - TOKEN_MIN) / (TOKEN_MAX - TOKEN_MIN)) * 100;
   }, []);
 
   const xValFromPct = useCallback((xPct: number) => {
     return Math.round((TOKEN_MIN + xPct * (TOKEN_MAX - TOKEN_MIN)) / 1000) * 1000;
   }, []);
 
-  const topKPct = yPctFromVal(topK);
-  const budgetPct = xPctFromVal(tokenBudget);
+  const outputFromXPct = useCallback((xPct: number) => {
+    const raw = TOKEN_MIN + xPct * (TOKEN_MAX - TOKEN_MIN);
+    return Math.max(OUTPUT_MIN, Math.min(OUTPUT_MAX, Math.round(raw / 256) * 256));
+  }, []);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragging.current) return;
+    if (!dragTarget.current) return;
     const rect = plotRef.current!.getBoundingClientRect();
     const yPct = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
     const xPct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const newTopK = Math.max(TOPK_MIN, Math.min(effectiveTopKMax, yValFromPct(yPct)));
-    const newBudget = Math.max(TOKEN_MIN, Math.min(TOKEN_MAX, xValFromPct(xPct)));
-    onChange(newBudget, newTopK);
-  }, [yValFromPct, xValFromPct, effectiveTopKMax, onChange]);
+    const target = dragTarget.current;
+
+    if (target.type === 'input') {
+      const newTopK = Math.max(TOPK_MIN, Math.min(effectiveTopKMax, yValFromPct(yPct)));
+      const newBudget = Math.max(TOKEN_MIN, Math.min(TOKEN_MAX, xValFromPct(xPct)));
+      onUpdateSlot(target.modelId, { tokenBudget: newBudget, topK: newTopK });
+    } else if (target.type === 'output') {
+      const newOutput = outputFromXPct(xPct);
+      onUpdateSlot(target.modelId, { maxOutputTokens: newOutput });
+    }
+  }, [effectiveTopKMax, yValFromPct, xValFromPct, outputFromXPct, onUpdateSlot]);
+
+  // Find which slot a click is nearest to (for select or drag)
+  const findNearest = useCallback((xPct: number, yPct: number) => {
+    const GRAB_THRESH = 0.12;
+    let closestDist = Infinity;
+    let closestTarget: { type: 'input' | 'output'; modelId: number } | null = null;
+
+    for (const s of neuronSlots) {
+      const inputXPct = xPctFromVal(s.tokenBudget) / 100;
+      const inputYPct = yPctFromVal(s.topK) / 100;
+      const outputXPct = xPctFromVal(s.maxOutputTokens) / 100;
+      const outputYPct = OUTPUT_Y_PCT / 100;
+
+      const distToInput = Math.sqrt((xPct - inputXPct) ** 2 + (yPct - inputYPct) ** 2);
+      const distToOutput = Math.sqrt((xPct - outputXPct) ** 2 + (yPct - outputYPct) ** 2);
+
+      if (distToInput < closestDist && distToInput < GRAB_THRESH) {
+        closestDist = distToInput;
+        closestTarget = { type: 'input', modelId: s.id };
+      }
+      if (distToOutput < closestDist && distToOutput < GRAB_THRESH) {
+        closestDist = distToOutput;
+        closestTarget = { type: 'output', modelId: s.id };
+      }
+    }
+    return closestTarget;
+  }, [neuronSlots, yPctFromVal, xPctFromVal]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    dragging.current = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    handlePointerMove(e);
-  }, [handlePointerMove]);
+    const rect = plotRef.current!.getBoundingClientRect();
+    const xPct = (e.clientX - rect.left) / rect.width;
+    const yPct = (e.clientY - rect.top) / rect.height;
+    const nearest = findNearest(xPct, yPct);
+
+    if (!nearest) {
+      // Clicked empty space — deselect
+      onSelect(null);
+      return;
+    }
+
+    if (selectedId === nearest.modelId) {
+      // Already selected — start dragging
+      dragTarget.current = nearest;
+      plotRef.current!.setPointerCapture(e.pointerId);
+      handlePointerMove(e);
+    } else {
+      // Select this line
+      onSelect(nearest.modelId);
+    }
+  }, [findNearest, selectedId, onSelect, handlePointerMove]);
 
   const onPointerUp = useCallback(() => {
-    dragging.current = false;
+    dragTarget.current = null;
   }, []);
 
-  // Tick marks
   const xTicks = [1, 4, 8, 16, 32];
   const yTicks = [1, 10, 30, 50, 100, 250, 500].filter(v => v <= effectiveTopKMax);
+  const hasSelection = selectedId != null;
 
   return (
     <div className="xy-plot-container">
@@ -451,6 +555,7 @@ function XYPlot({ tokenBudget, topK, maxNeurons, onChange }: {
         <div
           ref={plotRef}
           className="xy-plot-area"
+          style={{ aspectRatio: String(PLOT_ASPECT) }}
           onPointerDown={onPointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={onPointerUp}
@@ -464,18 +569,78 @@ function XYPlot({ tokenBudget, topK, maxNeurons, onChange }: {
             const top = yPctFromVal(v);
             return <div key={v} className="xy-gridline-h" style={{ top: `${top}%` }} />;
           })}
-          {/* Crosshairs */}
-          <div className="xy-crosshair-h" style={{ top: `${topKPct}%` }} />
-          <div className="xy-crosshair-v" style={{ left: `${budgetPct}%` }} />
-          {/* TopK dot */}
-          <div
-            className="xy-dot xy-dot-topk"
-            style={{ left: `${budgetPct}%`, top: `${topKPct}%` }}
-            title="Top-K (max active neurons)"
-          />
-          {/* Value readout */}
+
+          {/* SVG lines */}
+          <svg
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+          >
+            {neuronSlots.map(s => {
+              const x1 = xPctFromVal(s.tokenBudget);
+              const y1 = yPctFromVal(s.topK);
+              const x2 = xPctFromVal(s.maxOutputTokens);
+              const y2 = OUTPUT_Y_PCT;
+              const isSelected = selectedId === s.id;
+              const faded = hasSelection && !isSelected;
+              return (
+                <line key={s.id} x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke={s.color}
+                  strokeWidth={isSelected ? '1.2' : '0.6'}
+                  strokeLinecap="round"
+                  opacity={faded ? 0.2 : 1}
+                />
+              );
+            })}
+          </svg>
+
+          {/* HTML dots and labels (neuron slots only) */}
+          {neuronSlots.map(s => {
+            const isSelected = selectedId === s.id;
+            const faded = hasSelection && !isSelected;
+            const outputXPct = xPctFromVal(s.maxOutputTokens);
+            const inputXPct = xPctFromVal(s.tokenBudget);
+            const inputYPct = yPctFromVal(s.topK);
+            const dx = outputXPct - inputXPct;
+            const dy = (OUTPUT_Y_PCT - inputYPct) / PLOT_ASPECT;
+            let angleDeg = Math.atan2(dy, dx) * (180 / Math.PI);
+            if (angleDeg > 90) angleDeg -= 180;
+            if (angleDeg < -90) angleDeg += 180;
+            const midXPct = (inputXPct + outputXPct) / 2;
+            const midYPct = (inputYPct + OUTPUT_Y_PCT) / 2;
+            const opacity = faded ? 0.2 : 1;
+
+            return (
+              <div key={s.id} style={{ opacity }}>
+                <div className="uplot-dot" style={{
+                  left: `${inputXPct}%`, top: `${inputYPct}%`,
+                  background: s.color, borderColor: s.color,
+                  width: isSelected ? 14 : 12, height: isSelected ? 14 : 12,
+                  boxShadow: isSelected ? `0 0 10px ${s.color}` : undefined,
+                }} />
+                <div className="uplot-dot uplot-dot-sm" style={{
+                  left: `${outputXPct}%`, top: `${OUTPUT_Y_PCT}%`,
+                  background: s.color, borderColor: '#fff',
+                  boxShadow: isSelected ? `0 0 10px ${s.color}` : undefined,
+                }} />
+                <div className="uplot-label" style={{
+                  left: `${midXPct}%`, top: `${midYPct}%`,
+                  color: s.color,
+                  transform: `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-10px)`,
+                }}>
+                  {getModeLabel(s.mode)}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Output Y level indicator */}
+          <div className="xy-crosshair-h" style={{ top: `${OUTPUT_Y_PCT}%`, opacity: 0.15, borderTop: '1px dashed var(--text-dim)' }} />
+          <div className="unified-output-label" style={{ top: `${OUTPUT_Y_PCT}%` }}>Output</div>
+
+          {/* Readout */}
           <div className="xy-readout">
-            {(tokenBudget / 1000).toFixed(0)}K &middot; K={topK}
+            {neuronSlots.map(s => <span key={s.id} style={{ color: s.color, opacity: hasSelection && selectedId !== s.id ? 0.3 : 1 }}>K={s.topK} </span>)}
           </div>
         </div>
         <div className="xy-plot-xticks">
@@ -485,21 +650,27 @@ function XYPlot({ tokenBudget, topK, maxNeurons, onChange }: {
           })}
         </div>
       </div>
-      <div className="xy-plot-xlabel">Token Budget</div>
+      <div className="xy-plot-xlabel">Tokens (Input Budget &amp; Max Output)</div>
     </div>
   );
 }
 
-function SlotBuilder({ slots, onChange, capacity }: {
+function SlotBuilder({ slots, onChange, capacity, groupedModels }: {
   slots: SlotConfig[];
   onChange: (slots: SlotConfig[]) => void;
   capacity: GraphCapacity | null;
+  groupedModels: Record<string, ModelOption[]>;
 }) {
-  function addSlot() {
-    onChange([...slots, { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 4000, topK: 30 }]);
+  const [selectedSlotId, setSelectedSlotId] = useState<number | null>(null);
+  const neuronSlots = slots.filter(s => !s.mode.endsWith('_raw'));
+  const rawSlots = slots.filter(s => s.mode.endsWith('_raw'));
+
+  function addSlot(mode: string) {
+    onChange([...slots, { id: nextSlotId++, mode, tokenBudget: 8000, topK: 60, maxOutputTokens: 4096, color: nextSlotColor() }]);
   }
 
   function removeSlot(id: number) {
+    if (selectedSlotId === id) setSelectedSlotId(null);
     onChange(slots.filter(s => s.id !== id));
   }
 
@@ -508,9 +679,52 @@ function SlotBuilder({ slots, onChange, capacity }: {
   }
 
   const maxNeurons = capacity?.active_neurons ?? 500;
+  const hasSelection = selectedSlotId != null;
 
   return (
     <div className="slot-builder">
+      {/* Auto-add dropdown */}
+      <div className="unified-controls">
+        <select
+          className="qlt-mode-select"
+          value=""
+          onChange={e => { if (e.target.value) addSlot(e.target.value); }}
+        >
+          <option value="" disabled>Add model...</option>
+          {Object.entries(groupedModels).map(([group, models]) => ([
+            <option key={`hdr-${group}`} disabled>── {group} ──</option>,
+            ...models.flatMap(m => [
+              <option key={`${m.display_name}_neuron`} value={`${m.display_name}_neuron`}>{m.display_name} + Neurons</option>,
+              <option key={`${m.display_name}_raw`} value={`${m.display_name}_raw`}>{m.display_name} Raw</option>,
+            ]),
+          ]))}
+        </select>
+      </div>
+
+      {/* Model legend pills — click to select */}
+      <div className="model-legend">
+        {slots.map(s => {
+          const isRaw = s.mode.endsWith('_raw');
+          const isSelected = selectedSlotId === s.id;
+          const faded = hasSelection && !isSelected;
+          return (
+            <span
+              key={s.id}
+              className={`model-pill${isSelected ? ' model-pill-selected' : ''}`}
+              style={{ borderColor: s.color, color: s.color, opacity: faded ? 0.4 : 1, cursor: 'pointer' }}
+              onClick={() => setSelectedSlotId(isSelected ? null : s.id)}
+            >
+              <span className="model-pill-dot" style={{ background: s.color }} />
+              {getModeLabel(s.mode)}
+              <span className="model-pill-detail">
+                {isRaw ? `Out=${s.maxOutputTokens}` : `K=${s.topK} In=${Math.round(s.tokenBudget / 1000)}K Out=${s.maxOutputTokens}`}
+              </span>
+              <button className="model-pill-remove" onClick={e => { e.stopPropagation(); removeSlot(s.id); }} disabled={slots.length <= 1} title="Remove">&times;</button>
+            </span>
+          );
+        })}
+      </div>
+
       {capacity && (
         <div className="graph-capacity-bar">
           <span className="capacity-label">Graph:</span>
@@ -521,47 +735,22 @@ function SlotBuilder({ slots, onChange, capacity }: {
           <span className="capacity-value">{capacity.total_tokens.toLocaleString()} total</span>
         </div>
       )}
-      <div className="slot-grid">
-        {slots.map(slot => {
-          const isNeuron = NEURON_MODES.has(slot.mode);
-          return (
-            <div key={slot.id} className="slot-card" style={{ borderColor: (MODE_COLORS[slot.mode] ?? '#c8d0dc') + '66' }}>
-              <div className="slot-card-header">
-                <select
-                  className="slot-mode-select"
-                  value={slot.mode}
-                  onChange={e => updateSlot(slot.id, { mode: e.target.value })}
-                >
-                  {ALL_MODES.map(m => (
-                    <option key={m.key} value={m.key}>{m.label}</option>
-                  ))}
-                </select>
-                <button
-                  className="slot-remove-btn"
-                  onClick={() => removeSlot(slot.id)}
-                  title="Remove slot"
-                  disabled={slots.length <= 1}
-                >
-                  &times;
-                </button>
+
+      {/* Graph + raw models side by side */}
+      <div className="unified-graph-row">
+        <UnifiedPlot slots={neuronSlots} maxNeurons={maxNeurons} selectedId={selectedSlotId} onSelect={setSelectedSlotId} onUpdateSlot={updateSlot} />
+        {rawSlots.length > 0 && (
+          <div className="raw-models-column">
+            <div className="raw-models-header">Raw</div>
+            {rawSlots.map(s => (
+              <div key={s.id} className="raw-model-chip" style={{ borderColor: s.color, color: s.color }}>
+                <span className="model-pill-dot" style={{ background: s.color }} />
+                {getModeLabel(s.mode)}
+                <button className="model-pill-remove" onClick={() => removeSlot(s.id)} title="Remove">&times;</button>
               </div>
-              {isNeuron ? (
-                <XYPlot
-                  tokenBudget={slot.tokenBudget}
-                  topK={slot.topK}
-                  maxNeurons={maxNeurons}
-                  onChange={(tb, tk) => updateSlot(slot.id, { tokenBudget: tb, topK: tk })}
-                />
-              ) : (
-                <div className="slot-raw-label">Raw mode — no neuron context</div>
-              )}
-            </div>
-          );
-        })}
-        <button className="slot-card slot-add-card" onClick={addSlot}>
-          <span className="slot-add-icon">+</span>
-          <span>Add Slot</span>
-        </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -745,8 +934,13 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const elapsedRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const { models: availableModels, grouped: groupedModels } = useModels();
+  const ALL_MODES = useMemo(() => buildAllModes(availableModels), [availableModels]);
+  const MODE_COLORS = useMemo(() => buildModeColors(availableModels), [availableModels]);
+
+
   const [slotConfigs, setSlotConfigs] = useState<SlotConfig[]>([
-    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 4000, topK: 30 },
+    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, topK: 60, maxOutputTokens: 4096, color: nextSlotColor() },
   ]);
   const [baseline, setBaseline] = useState('opus_raw');
   const [graphCapacity, setGraphCapacity] = useState<GraphCapacity | null>(null);
@@ -754,13 +948,14 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [slotLoadingSet, setSlotLoadingSet] = useState<Set<number>>(new Set());
 
   const [evalLoading, setEvalLoading] = useState(false);
-  const [evalModel, setEvalModel] = useState<'haiku' | 'sonnet' | 'opus'>('haiku');
+  const [evalModel, setEvalModel] = useState<string>('haiku');
   const [evalText, setEvalText] = useState<string | null>(null);
   const [evalMdl, setEvalMdl] = useState<string | null>(null);
   const [evalIn, setEvalIn] = useState(0);
   const [evalOut, setEvalOut] = useState(0);
   const [evalScores, setEvalScores] = useState<EvalScoreOut[]>([]);
   const [evalWinner, setEvalWinner] = useState<string | null>(null);
+  const [evalLearning, setEvalLearning] = useState<import('../types').SynapticLearningOut | null>(null);
 
   const [history, setHistory] = useState<QuerySummary[]>([]);
   const [selectedQuery, setSelectedQuery] = useState<QueryDetail | null>(null);
@@ -799,6 +994,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       mode: sc.mode,
       token_budget: sc.tokenBudget,
       top_k: sc.topK,
+      max_output_tokens: sc.maxOutputTokens,
     }));
   }
 
@@ -927,6 +1123,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       setEvalOut(res.eval_output_tokens);
       setEvalScores(res.scores ?? []);
       setEvalWinner(res.winner ?? null);
+      setEvalLearning(res.learning ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Evaluation failed');
     } finally {
@@ -964,9 +1161,9 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   return (
     <div className="query-lab-layout">
       <div className={`query-history${historyCollapsed ? ' collapsed' : ''}`}>
-        <h3 style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span onClick={() => setHistoryCollapsed(c => !c)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
-            <span className={`section-chevron${!historyCollapsed ? ' open' : ''}`} />
+        <h3 style={{ display: 'flex', alignItems: 'flex-end', gap: 6, paddingBottom: 6 }}>
+          <span onClick={() => setHistoryCollapsed(c => !c)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+            <span className="sidebar-toggle" style={{ padding: 2 }}>{historyCollapsed ? '\u25B6' : '\u25C0'}</span>
             {!historyCollapsed ? 'Query History' : ''}
           </span>
           {!historyCollapsed && (
@@ -990,6 +1187,10 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
                   onClick={() => !isPending && selectHistoryItem(q.id)}
                   style={isPending ? { cursor: 'default' } : undefined}
                 >
+                  <div className="history-header-row">
+                    <span className="history-id">#{q.id}</span>
+                    {q.cost_usd != null && <span className="history-cost">${q.cost_usd.toFixed(4)}</span>}
+                  </div>
                   <div className="history-msg">{q.user_message}</div>
                   <div className="history-meta">
                     {isPending && <span className="tag intent" style={{ opacity: 0.7 }}>Running...</span>}
@@ -1000,7 +1201,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
                         return <span key={m} className="mode-badge" style={{ background: (MODE_COLORS[m] ?? '#c8d0dc') + '33', color: MODE_COLORS[m] ?? '#c8d0dc' }}>{def?.short ?? m}</span>;
                       })}
                     </span>
-                    {q.cost_usd != null && <span className="history-cost">${q.cost_usd.toFixed(4)}</span>}
                   </div>
                 </div>
               );
@@ -1023,11 +1223,17 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
               <span>{configCollapsed ? 'Show model config' : 'Model config'}</span>
             </div>
             <div className="config-collapsible">
-              <SlotBuilder slots={slotConfigs} onChange={setSlotConfigs} capacity={graphCapacity} />
+              <SlotBuilder slots={slotConfigs} onChange={setSlotConfigs} capacity={graphCapacity} groupedModels={groupedModels} />
               <div className="query-controls-bottom">
                 <select className="baseline-select" value={baseline} onChange={e => setBaseline(e.target.value)}>
-                  {ALL_MODES.map(m => (
-                    <option key={m.key} value={m.key}>Baseline: {m.label}</option>
+                  {Object.entries(groupedModels).map(([group, models]) => (
+                    [
+                      <option key={`bl-hdr-${group}`} disabled>── {group} ──</option>,
+                      ...models.flatMap(m => [
+                        <option key={`${m.display_name}_neuron`} value={`${m.display_name}_neuron`}>Baseline: {m.display_name} + Neurons</option>,
+                        <option key={`${m.display_name}_raw`} value={`${m.display_name}_raw`}>Baseline: {m.display_name} Raw</option>,
+                      ]),
+                    ]
                   ))}
                 </select>
                 <button className="btn" onClick={handleSubmit} disabled={loading || !message.trim() || slotConfigs.length === 0}>
@@ -1052,7 +1258,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
                 <div key={sc.id} className={`slot-loading-item${done ? ' done' : ''}`}>
                   {!done && <span className="slot-spinner" />}
                   {done && <span className="slot-check">&#10003;</span>}
-                  <span className="slot-loading-label" style={{ color: MODE_COLORS[sc.mode] ?? '#c8d0dc' }}>{label}</span>
+                  <span className="slot-loading-label" style={{ color: sc.color }}>{label}</span>
                 </div>
               );
             })}
@@ -1066,6 +1272,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             rating={rating} setRating={setRating} rated={rated} onRate={handleRate}
             evalText={evalText} evalMdl={evalMdl} evalIn={evalIn} evalOut={evalOut}
             evalScores={evalScores} evalWinner={evalWinner}
+            evalLearning={evalLearning}
             evalModel={evalModel} setEvalModel={setEvalModel}
             evalLoading={evalLoading} onEval={handleEval}
             onRunAgain={handleRunAgain} onRefinePhaseChange={setRefinePhase}
@@ -1096,18 +1303,20 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
 // ────────── Live Result ──────────
 
-function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron }: {
+function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron }: {
   result: QueryResponse; baseline: string; totalElapsedMs?: number;
   rating: number; setRating: (v: number) => void; rated: boolean; onRate: () => void;
   evalText: string | null; evalMdl: string | null; evalIn: number; evalOut: number;
   evalScores: EvalScoreOut[]; evalWinner: string | null;
-  evalModel: 'haiku' | 'sonnet' | 'opus'; setEvalModel: (v: 'haiku' | 'sonnet' | 'opus') => void;
+  evalLearning: import('../types').SynapticLearningOut | null;
+  evalModel: string; setEvalModel: (v: string) => void;
   evalLoading: boolean; onEval: () => void;
   onRunAgain: () => void; onRefinePhaseChange: (phase: RefinePhase) => void;
   initialRefineResult?: RefineResponse | null;
   onNavigateToNeuron?: (id: number) => void;
 }) {
   const hasNeurons = result.neuron_scores.length > 0;
+  const { models: availableModels } = useModels();
 
   return (
     <>
@@ -1155,7 +1364,7 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
       {result.slots.map((slot, i) => {
         const check = result.output_checks?.[i];
         return (
-          <Section key={i} title={slotDisplayLabel(slot)} titleStyle={{ borderLeft: `3px solid ${MODE_COLORS[slot.mode] ?? '#c8d0dc'}`, paddingLeft: 8 }}>
+          <Section key={i} title={slotDisplayLabel(slot)} titleStyle={{ borderLeft: `3px solid ${getModeColor(slot.mode)}`, paddingLeft: 8 }}>
             {check && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                 {check.grounding && check.grounding.confidence !== null && (
@@ -1183,7 +1392,13 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
                 ))}
               </div>
             )}
-            <div className="response-text">{slot.response}</div>
+            {slot.error ? (
+              <div style={{ padding: '12px 16px', background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, color: '#fca5a5', fontSize: '0.85rem' }}>
+                {slot.response}
+              </div>
+            ) : (
+              <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
+            )}
           </Section>
         );
       })}
@@ -1197,10 +1412,10 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
       {result.slots.length >= 2 && (
         <Section id="section-compare" title="Compare Outputs" className="eval-card" headerRight={
           <div className="eval-controls">
-            <select value={evalModel} onChange={e => setEvalModel(e.target.value as 'haiku' | 'sonnet' | 'opus')}>
-              <option value="haiku">Evaluate with Haiku</option>
-              <option value="sonnet">Evaluate with Sonnet</option>
-              <option value="opus">Evaluate with Opus</option>
+            <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
+              {availableModels.map(m => (
+                <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
+              ))}
             </select>
             <button className="btn btn-sm" onClick={onEval} disabled={evalLoading || !!evalText}>
               {evalLoading ? 'Evaluating...' : evalText ? 'Evaluated' : 'Compare Outputs'}
@@ -1216,6 +1431,23 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
                 <div className="breakdown-item"><div className="bd-value">{evalIn}</div><div className="bd-label">Eval In</div></div>
                 <div className="breakdown-item"><div className="bd-value">{evalOut}</div><div className="bd-label">Eval Out</div></div>
               </div>
+              {evalLearning && evalLearning.outcome !== 'skip' && (
+                <div style={{
+                  marginTop: 14, padding: '10px 14px', borderRadius: 6,
+                  background: evalLearning.outcome === 'win' ? '#22c55e15' : evalLearning.outcome === 'loss' ? '#ef444415' : '#fbbf2415',
+                  border: `1px solid ${evalLearning.outcome === 'win' ? '#22c55e33' : evalLearning.outcome === 'loss' ? '#ef444433' : '#fbbf2433'}`,
+                }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: evalLearning.outcome === 'win' ? '#22c55e' : evalLearning.outcome === 'loss' ? '#ef4444' : '#fbbf24', marginBottom: 4 }}>
+                    Synaptic Learning: {evalLearning.outcome.toUpperCase()}
+                    {evalLearning.winner_mode && <span style={{ fontWeight: 400, opacity: 0.7 }}> ({evalLearning.winner_mode})</span>}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', display: 'flex', gap: 16 }}>
+                    <span>{evalLearning.neurons_adjusted} neurons adjusted</span>
+                    <span>avg delta: {evalLearning.avg_delta >= 0 ? '+' : ''}{evalLearning.avg_delta.toFixed(4)}</span>
+                    {evalLearning.edges_adjusted > 0 && <span>{evalLearning.edges_adjusted} edges accelerated</span>}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </Section>
@@ -1340,8 +1572,9 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
 // ────────── History Detail ──────────
 
 function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDetail; baseline: string; onNavigateToNeuron?: (id: number) => void }) {
+  const { models: availableModels } = useModels();
   const [evalLoading, setEvalLoading] = useState(false);
-  const [evalModel, setEvalModel] = useState<'haiku' | 'sonnet' | 'opus'>('haiku');
+  const [evalModel, setEvalModel] = useState<string>('haiku');
   const [localEvalText, setLocalEvalText] = useState(query.eval_text);
   const [localEvalMdl, setLocalEvalMdl] = useState(query.eval_model);
   const [localEvalIn, setLocalEvalIn] = useState(query.eval_input_tokens);
@@ -1382,7 +1615,7 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
           <span className="history-modes" style={{ marginLeft: 8 }}>
             {query.slots.map((s, i) => {
               const label = slotDisplayLabel(s);
-              return <span key={i} className="mode-badge" style={{ background: (MODE_COLORS[s.mode] ?? '#c8d0dc') + '33', color: MODE_COLORS[s.mode] ?? '#c8d0dc' }}>{label}</span>;
+              return <span key={i} className="mode-badge" style={{ background: (getModeColor(s.mode)) + '33', color: getModeColor(s.mode) }}>{label}</span>;
             })}
           </span>
         </h3>
@@ -1451,8 +1684,14 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
 
       {/* Responses */}
       {query.slots.map((slot, i) => (
-        <Section key={i} title={slotDisplayLabel(slot)} titleStyle={{ borderLeft: `3px solid ${MODE_COLORS[slot.mode] ?? '#c8d0dc'}`, paddingLeft: 8 }}>
-          <div className="response-text">{slot.response}</div>
+        <Section key={i} title={slotDisplayLabel(slot)} titleStyle={{ borderLeft: `3px solid ${getModeColor(slot.mode)}`, paddingLeft: 8 }}>
+          {slot.error ? (
+            <div style={{ padding: '12px 16px', background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, color: '#fca5a5', fontSize: '0.85rem' }}>
+              {slot.response}
+            </div>
+          ) : (
+            <div className="response-text">{slot.response}</div>
+          )}
         </Section>
       ))}
 
@@ -1467,10 +1706,10 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
       {query.slots.length >= 2 && (
         <Section title="Compare Outputs" className="eval-card" headerRight={
           <div className="eval-controls">
-            <select value={evalModel} onChange={e => setEvalModel(e.target.value as 'haiku' | 'sonnet' | 'opus')}>
-              <option value="haiku">Evaluate with Haiku</option>
-              <option value="sonnet">Evaluate with Sonnet</option>
-              <option value="opus">Evaluate with Opus</option>
+            <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
+              {availableModels.map(m => (
+                <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
+              ))}
             </select>
             <button className="btn btn-sm" onClick={handleEval} disabled={evalLoading}>
               {evalLoading ? 'Evaluating...' : localEvalText ? 'Re-evaluate' : 'Compare Outputs'}

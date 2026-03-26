@@ -5,8 +5,9 @@ from pydantic import BaseModel, Field
 
 class QuerySlotRequest(BaseModel):
     mode: str
-    token_budget: int = Field(4000, ge=1000, le=32000)
-    top_k: int = Field(30, ge=1, le=500)
+    token_budget: int = Field(8000, ge=1000, le=32000)
+    top_k: int = Field(60, ge=1, le=500)
+    max_output_tokens: int | None = Field(None, ge=256, le=8192)
     label: str | None = None
 
 
@@ -88,7 +89,7 @@ class QueryResponse(BaseModel):
 
 
 class EvalRequest(BaseModel):
-    model: str = Field("haiku", pattern="^(haiku|sonnet|opus)$")
+    model: str = Field("haiku", min_length=1)
 
 
 class EvalScoreOut(BaseModel):
@@ -101,6 +102,16 @@ class EvalScoreOut(BaseModel):
     overall: int
 
 
+class SynapticLearningOut(BaseModel):
+    outcome: str
+    winner_mode: str | None = None
+    neurons_adjusted: int = 0
+    edges_adjusted: int = 0
+    avg_delta: float = 0.0
+    total_reward: float = 0.0
+    total_penalty: float = 0.0
+
+
 class EvalResponse(BaseModel):
     query_id: int
     eval_text: str
@@ -109,6 +120,32 @@ class EvalResponse(BaseModel):
     eval_output_tokens: int
     scores: list[EvalScoreOut] = []
     winner: str | None = None
+    learning: SynapticLearningOut | None = None
+
+
+class LearningEventOut(BaseModel):
+    id: int
+    query_id: int
+    neuron_id: int
+    neuron_label: str | None = None
+    event_type: str
+    old_avg_utility: float
+    new_avg_utility: float
+    effective_delta: float
+    combined_score: float
+    attribution_weight: float
+    outcome: str
+    winner_mode: str | None = None
+    created_at: str | None = None
+
+
+class LearningAnalytics(BaseModel):
+    total_events: int
+    total_wins: int
+    total_losses: int
+    avg_reward: float
+    avg_penalty: float
+    recent_events: list[LearningEventOut] = []
 
 
 class EvalScoreSummary(BaseModel):
@@ -245,7 +282,7 @@ class QueryDetail(BaseModel):
 
 
 class RefineRequest(BaseModel):
-    model: str = Field("haiku", pattern="^(haiku|sonnet|opus)$")
+    model: str = Field("haiku", min_length=1)
     max_tokens: int = Field(4096, ge=512, le=16384)
     user_context: str | None = Field(None, max_length=16000)
 
@@ -338,7 +375,7 @@ class AutopilotConfigUpdate(BaseModel):
     interval_minutes: int | None = None
     focus_neuron_id: int | None = Field(None, description="Neuron ID to focus on (L0-L5). Set to 0 to clear.")
     max_layer: int | None = Field(None, ge=0, le=5, description="Max layer depth for new neuron creation (0-5)")
-    eval_model: str | None = Field(None, pattern="^(haiku|sonnet|opus)$")
+    eval_model: str | None = Field(None, min_length=1)
 
 
 class AutopilotRunOut(BaseModel):
@@ -368,12 +405,12 @@ class AutopilotTickResponse(BaseModel):
 
 
 class ObservationEvalRequest(BaseModel):
-    model: str = Field("haiku", pattern="^(haiku|sonnet|opus)$")
+    model: str = Field("haiku", min_length=1)
 
 
 class ObservationBatchEvalRequest(BaseModel):
     observation_ids: list[int] = Field(..., max_length=20)
-    model: str = Field("haiku", pattern="^(haiku|sonnet|opus)$")
+    model: str = Field("haiku", min_length=1)
 
 
 class ObservationApplyRequest(BaseModel):

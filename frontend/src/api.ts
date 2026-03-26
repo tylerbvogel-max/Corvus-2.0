@@ -53,6 +53,21 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ── Available LLM models ──
+
+export interface ModelOption {
+  display_name: string;
+  provider: string;
+  api_id: string;
+  tier: string;
+  input_price: number;
+  output_price: number;
+}
+
+export function fetchAvailableModels(): Promise<ModelOption[]> {
+  return json<ModelOption[]>('/models');
+}
+
 // ── Simple chat (no neuron pipeline) ──
 
 export interface ChatMessage {
@@ -253,6 +268,7 @@ export interface SlotSpec {
   mode: string;
   token_budget: number;
   top_k: number;
+  max_output_tokens?: number;
   label?: string;
 }
 
@@ -345,7 +361,7 @@ export function submitQueryStream(
   return { promise, abort: () => controller.abort() };
 }
 
-export function evaluateQuery(queryId: number, model: 'haiku' | 'sonnet' | 'opus'): Promise<EvalResponse> {
+export function evaluateQuery(queryId: number, model: string): Promise<EvalResponse> {
   return json<EvalResponse>(`/query/${queryId}/evaluate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -361,7 +377,7 @@ export function submitRating(queryId: number, utility: number): Promise<RatingRe
   });
 }
 
-export function refineQuery(queryId: number, model: 'haiku' | 'sonnet' | 'opus', maxTokens: number = 4096, userContext?: string): Promise<RefineResponse> {
+export function refineQuery(queryId: number, model: string, maxTokens: number = 4096, userContext?: string): Promise<RefineResponse> {
   const body: Record<string, string | number> = { model, max_tokens: maxTokens };
   if (userContext?.trim()) body.user_context = userContext.trim();
   return json<RefineResponse>(`/query/${queryId}/refine`, {
@@ -377,6 +393,12 @@ export function applyRefinements(queryId: number, updateIds: number[], newNeuron
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ update_ids: updateIds, new_neuron_ids: newNeuronIds }),
   });
+}
+
+// ── Synaptic Learning ──
+
+export function fetchLearningAnalytics(): Promise<import('./types').LearningAnalytics> {
+  return json<import('./types').LearningAnalytics>('/learning-analytics');
 }
 
 export function fetchDeptChord(layer = 1, minWeight = 0.15): Promise<DeptChordEntry[]> {
@@ -1204,6 +1226,54 @@ export function fetchAuditLog(opts?: { action?: string; endpoint_filter?: string
 export function fetchAuditLogSummary(since?: string): Promise<AuditLogSummary> {
   const qs = since ? `?since=${encodeURIComponent(since)}` : '';
   return json<AuditLogSummary>(`/admin/audit-log/summary${qs}`);
+}
+
+// ── Provenance (Knowledge Governance) ──
+
+export interface SourceDocumentOut {
+  id: number;
+  canonical_id: string;
+  family: string;
+  version: string | null;
+  status: string;
+  authority_level: string | null;
+  issuing_body: string | null;
+  effective_date: string | null;
+  url: string | null;
+  notes: string | null;
+  superseded_by_id: number | null;
+  created_at: string | null;
+}
+
+export interface AuthoritySummaryItem {
+  authority_level: string | null;
+  count: number;
+}
+
+export interface StaleProvenanceNeuron {
+  neuron_id: number;
+  label: string;
+  layer: number;
+  department: string;
+  stale_sources: {
+    link_id: number;
+    source_canonical_id: string;
+    source_family: string;
+    source_status: string;
+    flagged_at: string | null;
+  }[];
+}
+
+export function fetchSourceDocuments(): Promise<SourceDocumentOut[]> {
+  return json<SourceDocumentOut[]>('/admin/source-documents');
+}
+
+export function fetchAuthoritySummary(): Promise<AuthoritySummaryItem[]> {
+  return json<AuthoritySummaryItem[]>('/admin/provenance/authority-summary');
+}
+
+export function fetchProvenanceStale(): Promise<StaleProvenanceNeuron[]> {
+  return json<StaleProvenanceNeuron[]>('/admin/provenance/stale');
 }
 
 // ── System Use Banner (AC-8) ──

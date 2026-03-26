@@ -24,6 +24,10 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
   useEffect(() => {
     const labels = models.map(m => m.label);
     const colors = models.map(m => m.color);
+    const style = getComputedStyle(document.documentElement);
+    const textColor = style.getPropertyValue('--text').trim() || '#c8d0dc';
+    const textDimColor = style.getPropertyValue('--text-dim').trim() || '#c8d0dc';
+    const gridColor = style.getPropertyValue('--border').trim() || '#1e2d4a';
 
     if (inputRef.current) {
       inputChart.current?.destroy();
@@ -54,12 +58,12 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
           scales: {
             y: {
               beginAtZero: true,
-              title: { display: true, text: 'Input Tokens', color: '#c8d0dc', font: { size: 11 } },
-              ticks: { color: '#c8d0dc' },
-              grid: { color: '#1e2d4a' },
+              title: { display: true, text: 'Input Tokens', color: textDimColor, font: { size: 11 } },
+              ticks: { color: textDimColor },
+              grid: { color: gridColor },
             },
             x: {
-              ticks: { color: '#ffffff', font: { weight: 'bold' }, maxRotation: 45, minRotation: 0 },
+              ticks: { color: textColor, font: { weight: 'bold' }, maxRotation: 45, minRotation: 0 },
               grid: { display: false },
             },
           },
@@ -96,12 +100,12 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
           scales: {
             y: {
               beginAtZero: true,
-              title: { display: true, text: 'Output Tokens', color: '#c8d0dc', font: { size: 11 } },
-              ticks: { color: '#c8d0dc' },
-              grid: { color: '#1e2d4a' },
+              title: { display: true, text: 'Output Tokens', color: textDimColor, font: { size: 11 } },
+              ticks: { color: textDimColor },
+              grid: { color: gridColor },
             },
             x: {
-              ticks: { color: '#ffffff', font: { weight: 'bold' }, maxRotation: 45, minRotation: 0 },
+              ticks: { color: textColor, font: { weight: 'bold' }, maxRotation: 45, minRotation: 0 },
               grid: { display: false },
             },
           },

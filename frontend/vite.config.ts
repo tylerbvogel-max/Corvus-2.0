@@ -19,6 +19,9 @@ export default defineConfig({
       '/eval-scores': apiTarget,
       '/ingest': apiTarget,
       '/corvus': apiTarget,
+      '/chat': apiTarget,
+      '/models': apiTarget,
+      '/learning-analytics': apiTarget,
     },
   },
 })

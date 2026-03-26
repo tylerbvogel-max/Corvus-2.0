@@ -77,6 +77,7 @@ export interface SlotResult {
   token_budget: number | null;
   top_k: number | null;
   label: string | null;
+  error?: boolean;
 }
 
 export interface NeuronScoreResponse {
@@ -208,6 +209,16 @@ export interface EvalScoreOut {
   overall: number;
 }
 
+export interface SynapticLearningOut {
+  outcome: string;
+  winner_mode: string | null;
+  neurons_adjusted: number;
+  edges_adjusted: number;
+  avg_delta: number;
+  total_reward: number;
+  total_penalty: number;
+}
+
 export interface EvalResponse {
   query_id: number;
   eval_text: string;
@@ -216,6 +227,32 @@ export interface EvalResponse {
   eval_output_tokens: number;
   scores: EvalScoreOut[];
   winner: string | null;
+  learning: SynapticLearningOut | null;
+}
+
+export interface LearningEventOut {
+  id: number;
+  query_id: number;
+  neuron_id: number;
+  neuron_label: string | null;
+  event_type: string;
+  old_avg_utility: number;
+  new_avg_utility: number;
+  effective_delta: number;
+  combined_score: number;
+  attribution_weight: number;
+  outcome: string;
+  winner_mode: string | null;
+  created_at: string | null;
+}
+
+export interface LearningAnalytics {
+  total_events: number;
+  total_wins: number;
+  total_losses: number;
+  avg_reward: number;
+  avg_penalty: number;
+  recent_events: LearningEventOut[];
 }
 
 export interface RatingResponse {

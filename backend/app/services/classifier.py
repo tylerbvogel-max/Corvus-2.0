@@ -1,9 +1,9 @@
-"""Stage 1: Intent classification via Claude CLI."""
+"""Stage 1: Intent classification via LLM provider."""
 
 import json
 import logging
 
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat
 from app.tenant import tenant
 
 logger = logging.getLogger(__name__)
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 async def classify_query(message: str) -> dict:
     """Call Claude CLI to classify a user query. Returns classification dict and token counts."""
-    result = await claude_chat(tenant.classify_system_prompt, message, max_tokens=300, model="haiku")
+    result = await llm_chat(tenant.classify_system_prompt, message, max_tokens=300, model="haiku")
 
     raw_text = result["text"].strip()
     logger.info(f"Classifier raw response ({len(raw_text)} chars): {raw_text[:300]}")

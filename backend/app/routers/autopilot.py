@@ -21,7 +21,7 @@ from app.schemas import (
     AutopilotConfigOut, AutopilotConfigUpdate, AutopilotRunOut, AutopilotTickResponse,
 )
 from app.services.executor import execute_query
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat
 from app.services.neuron_service import get_system_state
 from app.services.gap_detector import detect_gap, GapTarget
 
@@ -526,7 +526,7 @@ async def _generate_query(
         )
         user_prompt = f"Training directive: {directive or 'general knowledge improvement'}{focus_section}{recent_section}"
 
-    result = await claude_chat(system_prompt, user_prompt, max_tokens=256, model="haiku")
+    result = await llm_chat(system_prompt, user_prompt, max_tokens=256, model="haiku")
     query_text = result["text"].strip().strip('"').strip("'")
     return query_text, result["cost_usd"]
 
@@ -603,7 +603,7 @@ async def _self_evaluate(
 
     user_prompt = f"Question:\n{query.user_message}\n\nResponse:\n{response_text}"
 
-    result = await claude_chat(system_prompt, user_prompt, max_tokens=512, model=model)
+    result = await llm_chat(system_prompt, user_prompt, max_tokens=512, model=model)
     raw = result["text"].strip()
     accuracy, completeness, clarity, faithfulness, overall, verdict = _parse_eval_response(raw)
 
@@ -889,7 +889,7 @@ async def _refine(
     system_prompt = _build_refine_prompt(gap, coverage_gap, max_layer)
     user_prompt = _build_refine_user_prompt(query, eval_scores, neuron_sections, all_neurons, coverage_gap)
 
-    result = await claude_chat(system_prompt, user_prompt, max_tokens=4096, model=model)
+    result = await llm_chat(system_prompt, user_prompt, max_tokens=4096, model=model)
     reasoning, updates_raw, new_neurons_raw = _parse_refine_response(result["text"].strip())
 
     query.refine_json = json.dumps({

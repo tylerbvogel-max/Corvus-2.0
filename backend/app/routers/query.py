@@ -6,17 +6,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
-from app.models import Query, NeuronFiring, Neuron, EvalScore, NeuronRefinement
+from app.models import Query, NeuronFiring, Neuron, EvalScore, NeuronRefinement, SynapticLearningEvent
 from app.schemas import (
     QueryRequest, QueryResponse, QuerySummary, QueryDetail, NeuronHit, SlotResult,
     EvalRequest, EvalResponse, EvalScoreOut, EvalScoreSummary,
     RatingRequest, RatingResponse,
     RefineRequest, RefineResponse, NeuronUpdateSuggestion, NewNeuronSuggestion,
     ApplyRefineRequest, ApplyRefineResponse, RefinementOut,
+    LearningEventOut, LearningAnalytics,
 )
 from app.services.executor import execute_query, prepare_context
-from app.services.claude_cli import claude_chat, estimate_cost
+from app.services.llm_provider import llm_chat, estimate_cost, get_available_models, MODEL_REGISTRY, get_valid_model_names
 from app.services.neuron_service import get_system_state, score_candidates
 from app.services.scoring_engine import update_impact_ema
 from app.services.input_guard import check_input, check_output_risk, check_output_grounding
@@ -25,7 +27,15 @@ from sqlalchemy import select, func
 
 router = APIRouter(tags=["query"])
 
-VALID_MODES = {"haiku_neuron", "haiku_raw", "sonnet_neuron", "sonnet_raw", "opus_neuron", "opus_raw"}
+def _build_valid_modes() -> set[str]:
+    """Generate valid modes from MODEL_REGISTRY: {model}_neuron and {model}_raw for each model."""
+    modes: set[str] = set()
+    for name in MODEL_REGISTRY:
+        modes.add(f"{name}_neuron")
+        modes.add(f"{name}_raw")
+    return modes
+
+VALID_MODES = _build_valid_modes()
 
 
 # ── Lightweight context endpoint for Corvus integration ──
@@ -74,9 +84,15 @@ async def get_context(req: ContextRequest, db: AsyncSession = Depends(get_db)):
     )
 
 
+@router.get("/models")
+async def list_available_models():
+    """Return list of LLM models whose provider API key is configured."""
+    return get_available_models()
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
-    model: str = Field("haiku", pattern=r"^(haiku|sonnet|opus)$")
+    model: str = Field("haiku")
     history: list[dict] = Field(default_factory=list)
 
 
@@ -112,7 +128,10 @@ async def simple_chat(req: ChatRequest):
         history_text = "\n".join(lines) + "\n\nUser: "
 
     user_message = history_text + req.message if history_text else req.message
-    result = await claude_chat(system_prompt, user_message, max_tokens=2048, model=req.model)
+    valid_names = get_valid_model_names()
+    if req.model not in valid_names:
+        raise HTTPException(status_code=400, detail=f"Invalid or unavailable model: {req.model}")
+    result = await llm_chat(system_prompt, user_message, max_tokens=2048, model=req.model)
     cost = estimate_cost(req.model, result["input_tokens"], result["output_tokens"])
     return ChatResponse(
         response=result["text"],
@@ -637,7 +656,7 @@ async def evaluate_query(
     eval_system, eval_prompt, answer_map = _build_eval_prompts(query.user_message, slots)
     assert len(answer_map) >= 2, "answer_map must have at least 2 entries"
 
-    result = await claude_chat(eval_system, eval_prompt, max_tokens=2048, model=req.model)
+    result = await llm_chat(eval_system, eval_prompt, max_tokens=2048, model=req.model)
     raw_text = result["text"].strip()
 
     parsed_scores, verdict_text, winner = _parse_eval_response(raw_text)
@@ -649,6 +668,22 @@ async def evaluate_query(
     query.eval_model = req.model
     query.eval_input_tokens = result["input_tokens"]
     query.eval_output_tokens = result["output_tokens"]
+
+    # Synaptic learning: adjust neuron weights based on eval outcome
+    learning_out = None
+    if settings.synaptic_learning_enabled:
+        from app.services.synaptic_learning import apply_synaptic_learning
+        from app.schemas import SynapticLearningOut
+        summary = await apply_synaptic_learning(db, query_id, winner, answer_map)
+        learning_out = SynapticLearningOut(
+            outcome=summary.outcome, winner_mode=summary.winner_mode,
+            neurons_adjusted=summary.neurons_adjusted,
+            edges_adjusted=summary.edges_adjusted,
+            avg_delta=summary.avg_delta,
+            total_reward=summary.total_reward,
+            total_penalty=summary.total_penalty,
+        )
+
     await db.commit()
 
     return EvalResponse(
@@ -659,6 +694,7 @@ async def evaluate_query(
         eval_output_tokens=result["output_tokens"],
         scores=score_rows,
         winner=winner,
+        learning=learning_out,
     )
 
 
@@ -692,6 +728,49 @@ async def list_eval_scores(db: AsyncSession = Depends(get_db)):
         )
         for r in rows
     ]
+
+
+@router.get("/learning-analytics", response_model=LearningAnalytics)
+async def get_learning_analytics(db: AsyncSession = Depends(get_db)):
+    """Return synaptic learning history and aggregate metrics."""
+    total = (await db.execute(select(func.count(SynapticLearningEvent.id)))).scalar() or 0
+    wins = (await db.execute(
+        select(func.count(SynapticLearningEvent.id)).where(SynapticLearningEvent.outcome == "win")
+    )).scalar() or 0
+    losses = (await db.execute(
+        select(func.count(SynapticLearningEvent.id)).where(SynapticLearningEvent.outcome == "loss")
+    )).scalar() or 0
+    avg_reward = (await db.execute(
+        select(func.avg(SynapticLearningEvent.effective_delta)).where(SynapticLearningEvent.event_type == "reward")
+    )).scalar() or 0.0
+    avg_penalty = (await db.execute(
+        select(func.avg(func.abs(SynapticLearningEvent.effective_delta))).where(SynapticLearningEvent.event_type == "penalty")
+    )).scalar() or 0.0
+
+    recent = await db.execute(
+        select(SynapticLearningEvent)
+        .order_by(SynapticLearningEvent.id.desc())
+        .limit(100)
+    )
+    events = []
+    for e in recent.scalars().all():
+        neuron = await db.get(Neuron, e.neuron_id)
+        events.append(LearningEventOut(
+            id=e.id, query_id=e.query_id, neuron_id=e.neuron_id,
+            neuron_label=neuron.label if neuron else None,
+            event_type=e.event_type,
+            old_avg_utility=e.old_avg_utility, new_avg_utility=e.new_avg_utility,
+            effective_delta=e.effective_delta,
+            combined_score=e.combined_score, attribution_weight=e.attribution_weight,
+            outcome=e.outcome, winner_mode=e.winner_mode,
+            created_at=e.created_at.isoformat() if e.created_at else None,
+        ))
+
+    return LearningAnalytics(
+        total_events=total, total_wins=wins, total_losses=losses,
+        avg_reward=round(avg_reward, 6), avg_penalty=round(avg_penalty, 6),
+        recent_events=events,
+    )
 
 
 @router.post("/query/{query_id}/rate", response_model=RatingResponse)
@@ -886,7 +965,7 @@ async def refine_query(
     system_prompt = _build_refine_system_prompt()
     user_prompt = _build_refine_user_prompt(query, neurons, eval_scores, req.user_context)
 
-    result = await claude_chat(system_prompt, user_prompt, max_tokens=req.max_tokens, model=req.model)
+    result = await llm_chat(system_prompt, user_prompt, max_tokens=req.max_tokens, model=req.model)
     reasoning, updates, new_neurons = _parse_refine_response(result["text"].strip())
 
     response = RefineResponse(

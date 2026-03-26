@@ -648,7 +648,7 @@ if frontend_dist.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
     # SPA catch-all — must NOT match API prefixes
-    _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/tenant", "/tenants", "/docs", "/openapi", "/ingest", "/corvus")
+    _api_prefixes = ("/neurons", "/queries", "/query", "/context", "/eval-scores", "/admin", "/health", "/tenant", "/tenants", "/docs", "/openapi", "/ingest", "/corvus", "/models", "/chat", "/learning-analytics")
 
     def _is_api_path(path: str) -> bool:
         return bool(path) and any(path.startswith(p.lstrip("/")) for p in _api_prefixes)
@@ -656,11 +656,13 @@ if frontend_dist.exists():
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the SPA frontend, falling back to index.html for client-side routes."""
+        # Serve real static files first (logos, images, etc.)
+        if full_path:
+            file_path = frontend_dist / full_path
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(str(file_path))
         # Never intercept API paths — let them 404 naturally
         if _is_api_path(full_path):
             raise HTTPException(status_code=404, detail="Not found")
-        # Serve real static files
-        file_path = frontend_dist / full_path
-        if full_path and file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
+        # SPA fallback
         return FileResponse(str(frontend_dist / "index.html"))

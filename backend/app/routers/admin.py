@@ -566,7 +566,7 @@ async def ingest_source(
       - role_key: str | None (target role)
       - queue_entry_id: int | None (if resolving an emergent queue entry)
     """
-    from app.services.claude_cli import claude_chat
+    from app.services.llm_provider import llm_chat
 
     source_text, citation, source_type, department, role_key, queue_entry_id = _validate_ingest_body(body)
     parent_neuron = await _find_parent_neuron(db, role_key, department)
@@ -576,7 +576,7 @@ async def ingest_source(
     )
 
     try:
-        result = await claude_chat(system_prompt, user_msg, max_tokens=8192, model="sonnet")
+        result = await llm_chat(system_prompt, user_msg, max_tokens=8192, model="sonnet")
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -907,7 +907,7 @@ def _enrich_batch_proposals(proposals: list[dict], state: dict) -> None:
 
 async def _run_batch_ingest(job_id: str, start_chunk: int = 0):
     """Background task: process chunks sequentially through the chosen model."""
-    from app.services.claude_cli import claude_chat
+    from app.services.llm_provider import llm_chat
 
     state = await _load_batch_job_state(job_id)
     if not state:
@@ -935,7 +935,7 @@ async def _run_batch_ingest(job_id: str, start_chunk: int = 0):
         user_msg = _build_batch_chunk_user_msg(state, chunks[i], i, len(chunks), labels_so_far)
 
         try:
-            result = await claude_chat(state["system_prompt"], user_msg, max_tokens=8192, model=state["model"])
+            result = await llm_chat(state["system_prompt"], user_msg, max_tokens=8192, model=state["model"])
             json_match = re.search(r'\[.*\]', result["text"].strip(), re.DOTALL)
             if json_match:
                 proposals = json.loads(json_match.group())

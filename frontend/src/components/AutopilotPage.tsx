@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { AutopilotConfig, AutopilotRun, AutopilotChange, TreeNode } from '../types';
+import { useModels } from '../hooks/useModels';
 import {
   fetchAutopilotConfig,
   updateAutopilotConfig,
@@ -35,6 +36,7 @@ export default function AutopilotPage() {
   const [interval, setInterval] = useState(30);
   const [maxLayer, setMaxLayer] = useState(5);
   const [evalModel, setEvalModel] = useState('haiku');
+  const { grouped: groupedModels } = useModels();
   const [focusNeuronId, setFocusNeuronId] = useState<number | null>(null);
   const [focusNeuronLabel, setFocusNeuronLabel] = useState<string | null>(null);
 
@@ -264,9 +266,16 @@ export default function AutopilotPage() {
             <div className="autopilot-field">
               <label>Eval Model</label>
               <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
+                {Object.entries(groupedModels).map(([group, models]) => (
+                  [
+                    <option key={`hdr-${group}`} disabled style={{ fontWeight: 'bold' }}>── {group} ──</option>,
+                    ...models.map(m => (
+                      <option key={m.display_name} value={m.display_name}>
+                        {m.display_name}
+                      </option>
+                    )),
+                  ]
+                ))}
               </select>
             </div>
 

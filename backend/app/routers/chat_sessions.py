@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import ChatSession, ChatSessionMessage
-from app.services.claude_cli import claude_chat, estimate_cost
+from app.services.llm_provider import llm_chat, estimate_cost
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ async def generate_title(session_id: int, db: AsyncSession = Depends(get_db)):
         "User: Compare FAR and DFARS compliance → FAR vs DFARS Compliance"
     )
     try:
-        res = await claude_chat(system, first_user_msg.text[:300], max_tokens=20, model="haiku")
+        res = await llm_chat(system, first_user_msg.text[:300], max_tokens=20, model="haiku")
         title = res["text"].strip().strip('"').strip("'").split("\n")[0].strip()[:200]
         assert len(title) > 0, "Generated title must not be empty"
     except Exception as e:

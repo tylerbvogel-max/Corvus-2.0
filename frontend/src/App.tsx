@@ -18,6 +18,7 @@ import FairnessPage from './components/FairnessPage'
 import PerformancePage from './components/PerformancePage'
 import PerformanceExplanationPage from './components/PerformanceExplanationPage'
 import EmergentQueuePage from './components/EmergentQueuePage'
+import SynapticLearningPage from './components/SynapticLearningPage'
 import LayerHeatmap from './components/LayerHeatmap'
 import MethodologicalRisks from './components/MethodologicalRisks'
 import NeuronUniverse from './components/NeuronUniverse'
@@ -26,13 +27,16 @@ import ManagementReviewPage from './components/ManagementReviewPage'
 import CorvusPage from './components/CorvusPage'
 import ObservationReviewPage from './components/ObservationReviewPage'
 import ComplianceDashboard from './components/ComplianceDashboard'
+import KnowledgeGovernancePage from './components/KnowledgeGovernancePage'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
+import VisualGraphExperiment from './components/VisualGraphExperiment'
+
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'visual-graph' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'synaptic-learning' | 'knowledge-governance';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -63,6 +67,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: 'Query',
     items: [
       { key: 'query', label: 'Query Lab' },
+      { key: 'visual-graph', label: 'Visual Graph' },
       { key: 'samples', label: 'Samples' },
     ],
   },
@@ -84,11 +89,13 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { key: 'autopilot', label: 'Autopilot' },
       { key: 'refinements', label: 'Refinements' },
       { key: 'emergent-queue', label: 'Emergent Queue' },
+      { key: 'synaptic-learning', label: 'Synaptic Learning' },
     ],
   },
   {
     label: 'Evaluate',
     items: [
+      { key: 'knowledge-governance', label: 'Governance' },
       { key: 'performance', label: 'Performance' },
       { key: 'quality', label: 'Quality' },
       { key: 'fairness', label: 'Fairness' },
@@ -298,12 +305,14 @@ export default function App() {
         )}
         {tab === 'layer-heatmap' && <LayerHeatmap />}
         <div style={{ display: tab === 'query' ? 'contents' : 'none' }}><QueryLab onNavigateToNeuron={navigateToNeuron} /></div>
+        {tab === 'visual-graph' && <VisualGraphExperiment />}
         {tab === 'pipeline' && <PipelinePage />}
         {tab === 'evaluation' && <EvaluationPage />}
         {tab === 'refinements' && <RefinementHistory />}
         {tab === 'samples' && <SampleQueries />}
         {tab === 'autopilot' && <AutopilotPage />}
         {tab === 'emergent-queue' && <EmergentQueuePage />}
+        {tab === 'synaptic-learning' && <SynapticLearningPage />}
         {tab === 'nextsteps' && <NextSteps />}
         {tab === 'getting-started' && <GettingStartedPage />}
         {tab === 'about' && <AboutPage />}
@@ -315,6 +324,7 @@ export default function App() {
         {tab === 'fairness' && <FairnessPage />}
         {tab === 'performance' && <PerformancePage />}
         {tab === 'perf-explain' && <PerformanceExplanationPage />}
+        {tab === 'knowledge-governance' && <KnowledgeGovernancePage />}
         {tab === 'method-risks' && <MethodologicalRisks />}
       </main>
     </div>

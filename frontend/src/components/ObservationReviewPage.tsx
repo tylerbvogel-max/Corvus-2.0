@@ -6,6 +6,7 @@ import {
   applyObservation,
   rejectObservation,
 } from '../api';
+import { useModels } from '../hooks/useModels';
 import type {
   ObservationSummary,
   ObservationDetail,
@@ -38,6 +39,7 @@ export default function ObservationReviewPage() {
   const [loading, setLoading] = useState(false);
   const [evalLoading, setEvalLoading] = useState(false);
   const [model, setModel] = useState<string>('haiku');
+  const { grouped: groupedModels } = useModels();
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [checkedUpdates, setCheckedUpdates] = useState<Set<number>>(new Set());
@@ -171,9 +173,16 @@ export default function ObservationReviewPage() {
                   background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid rgba(255,255,255,0.1)',
                 }}
               >
-                <option value="haiku">Haiku</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
+                {Object.entries(groupedModels).map(([group, models]) => (
+                  [
+                    <option key={`hdr-${group}`} disabled style={{ fontWeight: 'bold' }}>── {group} ──</option>,
+                    ...models.map(m => (
+                      <option key={m.display_name} value={m.display_name}>
+                        {m.display_name}
+                      </option>
+                    )),
+                  ]
+                ))}
               </select>
             </div>
           </div>

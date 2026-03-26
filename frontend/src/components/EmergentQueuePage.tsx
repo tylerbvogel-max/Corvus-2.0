@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { DEPARTMENTS, DEPT_ROLES } from '../constants';
+import { useModels } from '../hooks/useModels';
 import {
   fetchEmergentQueue,
   dismissEmergentEntry,
@@ -42,6 +43,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 export default function EmergentQueuePage() {
+  const { grouped: groupedModels } = useModels();
   const [entries, setEntries] = useState<EmergentQueueEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -974,9 +976,16 @@ export default function EmergentQueuePage() {
                         onChange={e => setBatchModel(e.target.value)}
                         style={{ ...selectStyle, fontSize: '0.75rem' }}
                       >
-                        <option value="haiku">Haiku (fast, cheap)</option>
-                        <option value="sonnet">Sonnet (balanced)</option>
-                        <option value="opus">Opus (highest quality)</option>
+                        {Object.entries(groupedModels).map(([group, models]) => (
+                          [
+                            <option key={`hdr-${group}`} disabled style={{ fontWeight: 'bold' }}>── {group} ──</option>,
+                            ...models.map(m => (
+                              <option key={m.display_name} value={m.display_name}>
+                                {m.display_name}
+                              </option>
+                            )),
+                          ]
+                        ))}
                       </select>
                     </label>
                   )}
