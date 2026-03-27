@@ -4574,3 +4574,109 @@ details summary:hover { color: var(--text); }
   z-index: 1;
 }
 
+/* ────────── Pipeline Flow Layout ────────── */
+
+.pipeline-flow {
+  position: relative;
+  padding-left: 40px;
+}
+
+.pipeline-flow::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.12;
+}
+
+.pipeline-step {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.pipeline-step::before {
+  content: '';
+  position: absolute;
+  left: -33px;
+  top: 8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--accent);
+  z-index: 1;
+}
+
+.pipeline-step-done::before {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+
+.pipeline-step-active::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.pipeline-step-label {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pipeline-step-label .step-timing {
+  font-size: 0.6rem;
+  color: var(--accent);
+  font-family: var(--font-mono, monospace);
+  opacity: 0.7;
+}
+
+/* Branch layout for side-by-side sections */
+.pipeline-branch {
+  display: flex;
+  gap: 16px;
+}
+
+.pipeline-branch > * {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Output grid for model responses */
+.output-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+}
+
+.output-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.output-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.output-card .response-text {
+  font-size: 0.82rem;
+  max-height: 400px;
+  overflow-y: auto;
+}
+

@@ -7,7 +7,7 @@ import TokenCharts from './TokenCharts'
 import NeuronTreeViz from './NeuronTreeViz'
 import { marked } from 'marked'
 
-const layerColors = ['var(--layer0)', 'var(--layer1)', 'var(--layer2)', 'var(--layer3)', 'var(--layer4)', 'var(--layer5)'];
+
 
 // Configure marked for LLM response rendering
 marked.setOptions({ breaks: true, gfm: true });
@@ -755,170 +755,6 @@ function SlotBuilder({ slots, onChange, capacity, groupedModels }: {
   );
 }
 
-// ────────── Action Rail ──────────
-
-const PIPELINE_LABELS = [
-  { key: 'input_guard', label: 'Input Guard', section: 'section-guard' },
-  { key: 'structural_resolve', label: 'Structural Resolve' },
-  { key: 'embed_query', label: 'Embed Query' },
-  { key: 'classify', label: 'Classify', section: 'section-classification' },
-  { key: 'semantic_prefilter', label: 'Semantic Prefilter' },
-  { key: 'score_neurons', label: 'Score Neurons', section: 'section-activations' },
-  { key: 'spread_activation', label: 'Spread Activation', section: 'section-spread' },
-  { key: 'assemble_prompt', label: 'Assemble Prompt' },
-  { key: 'execute_llm', label: 'Execute LLM', section: 'section-slots' },
-  { key: 'output_checks', label: 'Output Checks' },
-];
-
-function ActionRail({ result, hasMultiSlot, hasNeurons, evalDone, evalLoading, refinePhase, loading, stageStatuses, stageTimes, onEval, onSubmit }: {
-  result: QueryResponse | null; hasMultiSlot: boolean; hasNeurons: boolean;
-  evalDone: boolean; evalLoading: boolean; refinePhase: RefinePhase;
-  loading: boolean; stageStatuses: Record<string, StageEvent>;
-  stageTimes: Record<string, number>; // ms duration per stage
-  onEval: () => void; onSubmit: () => void;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const hasResult = !!result;
-  const active = loading || hasResult;
-
-  function scrollAndClick(id: string) {
-    const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.click();
-    }
-  }
-
-  type StageStatus = 'pending' | 'active' | 'done' | 'skipped';
-
-  function getStageStatus(key: string): StageStatus {
-    if (!active) return 'pending';
-    if (hasResult) {
-      // Every stage that ran is 'done' — the stage completed its job regardless of outcome
-      const ev = stageStatuses[key];
-      if (ev) return 'done';
-      return 'done'; // all stages complete when result exists
-    }
-    const ev = stageStatuses[key];
-    if (ev) return ev.status === 'skipped' ? 'done' : ev.status as StageStatus;
-    return 'pending';
-  }
-
-  function getStageDetail(key: string): string | undefined {
-    const ev = stageStatuses[key];
-    if (ev?.detail) {
-      const d = ev.detail as Record<string, unknown>;
-      if (d.intent) return String(d.intent);
-      if (d.verdict) return String(d.verdict);
-      if (d.candidates) return `${d.candidates} candidates`;
-      if (d.scored) return `${d.scored} scored`;
-      if (d.neurons_activated) return `${d.neurons_activated} neurons`;
-    }
-    if (hasResult) {
-      if (key === 'classify' && result.intent) return result.intent;
-      if (key === 'input_guard' && result.input_guard) return result.input_guard.verdict;
-      if (key === 'assemble_prompt') return `${result.neurons_activated} neurons`;
-      if (key === 'execute_llm' && result.slots.length > 0) return result.slots.map(s => s.model).join(', ');
-    }
-    return undefined;
-  }
-
-  // ── Workflow actions ──
-  const workflowSteps = [
-    {
-      label: evalLoading ? 'Evaluating...' : evalDone ? 'Evaluated' : 'Evaluate',
-      enabled: hasResult && hasMultiSlot && !evalLoading && !evalDone,
-      done: evalDone,
-      action: () => {
-        document.getElementById('section-compare')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        onEval();
-      },
-    },
-    {
-      label: refinePhase === 'loading' ? 'Refining...' : refinePhase !== 'idle' && refinePhase !== 'ready' ? 'Refined' : 'Refine',
-      enabled: evalDone && hasNeurons && (refinePhase === 'ready' || refinePhase === 'has-suggestions' || refinePhase === 'applied'),
-      done: refinePhase === 'has-suggestions' || refinePhase === 'applying' || refinePhase === 'applied',
-      action: () => scrollAndClick('btn-refine'),
-    },
-    {
-      label: refinePhase === 'applying' ? 'Applying...' : refinePhase === 'applied' ? 'Applied' : 'Apply',
-      enabled: refinePhase === 'has-suggestions',
-      done: refinePhase === 'applied',
-      action: () => scrollAndClick('btn-apply'),
-    },
-    {
-      label: 'Run Again',
-      enabled: refinePhase === 'applied',
-      done: false,
-      action: onSubmit,
-    },
-  ];
-
-  return (
-    <div className={`action-rail${collapsed ? ' collapsed' : ''}`}>
-      <div className="rail-header" onClick={() => setCollapsed(c => !c)}>
-        <span className={`section-chevron${!collapsed ? ' open' : ''}`} />
-        {!collapsed && <span>Pipeline</span>}
-      </div>
-      {!collapsed && (
-        <>
-          <div className="rail-section-label">Stages</div>
-          <div className="rail-steps">
-            {PIPELINE_LABELS.map((stage, i) => {
-              const status = getStageStatus(stage.key);
-              const detail = getStageDetail(stage.key);
-              const durationMs = stageTimes[stage.key];
-              const isDone = status === 'done';
-              const isActive = status === 'active';
-              return (
-                <button
-                  key={stage.key}
-                  className={`rail-step${isDone ? ' done' : ''}${isActive ? ' active' : ''}`}
-                  disabled={!active}
-                  onClick={() => stage.section && document.getElementById(stage.section)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                  style={{ cursor: stage.section && active ? 'pointer' : 'default' }}
-                >
-                  <span className="rail-step-num">
-                    {isDone ? '\u2713' : isActive ? '\u25CF' : i + 1}
-                  </span>
-                  <div className="rail-step-content">
-                    <span className="rail-step-label">{stage.label}</span>
-                    {(detail || durationMs != null) && (
-                      <span className="rail-step-meta">
-                        {durationMs != null && <span className="rail-step-time">{durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`}</span>}
-                        {detail && <span className="rail-step-detail">{detail}</span>}
-                      </span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          {hasResult && (
-            <>
-              <div className="rail-divider" />
-              <div className="rail-section-label">Actions</div>
-              <div className="rail-steps">
-                {workflowSteps.map((step, i) => (
-                  <button
-                    key={i}
-                    className={`rail-step${step.done ? ' done' : ''}`}
-                    disabled={!step.enabled && !step.done}
-                    onClick={step.action}
-                  >
-                    <span className="rail-step-num">{step.done ? '\u2713' : i + 1}</span>
-                    <span className="rail-step-label">{step.label}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
 // ────────── Main Component ──────────
 
 export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: (id: number) => void } = {}) {
@@ -963,8 +799,8 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [refinePhase, setRefinePhase] = useState<RefinePhase>('idle');
   const [liveRefineRestore, setLiveRefineRestore] = useState<RefineResponse | null>(null);
-  const [stageStatuses, setStageStatuses] = useState<Record<string, StageEvent>>({});
-  const [stageTimes, setStageTimes] = useState<Record<string, number>>({});
+  const [, setStageStatuses] = useState<Record<string, StageEvent>>({});
+  const [, setStageTimes] = useState<Record<string, number>>({});
   const stageTimestamps = useRef<Record<string, number>>({});
   const [configCollapsed, setConfigCollapsed] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
@@ -1153,10 +989,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
     }
   }
 
-  const hasResult = !!result && view === 'new';
-  const hasNeurons = hasResult && result.neuron_scores.length > 0;
-  const hasMultiSlot = hasResult && result.slots.length >= 2;
-
   return (
     <div className="query-lab-layout">
       <div className={`query-history${historyCollapsed ? ' collapsed' : ''}`}>
@@ -1282,20 +1114,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
         {selectedQuery && view === 'history' && <HistoryDetail query={selectedQuery} baseline={baseline} onNavigateToNeuron={onNavigateToNeuron} />}
       </div>
-
-      <ActionRail
-        result={result}
-        hasMultiSlot={hasMultiSlot}
-        hasNeurons={hasNeurons}
-        evalDone={!!evalText}
-        evalLoading={evalLoading}
-        refinePhase={refinePhase}
-        loading={loading}
-        stageStatuses={stageStatuses}
-        stageTimes={stageTimes}
-        onEval={handleEval}
-        onSubmit={handleSubmit}
-      />
     </div>
   );
 }
@@ -1317,254 +1135,262 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
   const hasNeurons = result.neuron_scores.length > 0;
   const { models: availableModels } = useModels();
 
-  return (
-    <>
-      {hasNeurons && (
-        <div style={{ height: 500, marginBottom: 16 }}>
-          <NeuronTreeViz
-            queryId={result.query_id}
-            neuronScores={result.neuron_scores}
-            onNavigateToNeuron={onNavigateToNeuron}
-          />
-        </div>
-      )}
+  const guardVerdict = result.input_guard?.verdict;
+  const guardPass = !result.input_guard || result.input_guard.flag_count === 0;
 
+  return (
+    <div className="pipeline-flow">
+      {/* Step 1: Input Guard */}
+      <div className={`pipeline-step ${guardPass ? 'pipeline-step-done' : ''}`}>
+        <div className="pipeline-step-label">
+          Input Guard
+          <span className="step-timing">{guardPass ? 'pass' : guardVerdict?.toUpperCase()}</span>
+        </div>
+        {result.input_guard && result.input_guard.flag_count > 0 && (
+          <div style={{
+            padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem',
+            background: guardVerdict === 'warn' ? '#fb923c18' : '#ef444418',
+            border: `1px solid ${guardVerdict === 'warn' ? '#fb923c44' : '#ef444444'}`,
+          }}>
+            {result.input_guard.flags.map((f, i) => (
+              <div key={i} style={{ color: 'var(--text-dim)' }}>
+                <span style={{ color: f.severity === 'warn' ? '#fb923c' : '#ef4444', fontWeight: 600, fontSize: '0.7rem', textTransform: 'uppercase' }}>{f.severity}</span>
+                {' '}{f.description}{f.pattern ? ` — "${f.pattern}"` : ''}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Step 2: Structural Resolve */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Structural Resolve</div>
+      </div>
+
+      {/* Step 3: Embed Query */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Embed Query</div>
+      </div>
+
+      {/* Step 4: Classify */}
       {hasNeurons && result.intent && (
-        <Section title="Classification" defaultOpen={false}>
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">
+            Classify
+            <span className="step-timing">{result.intent}</span>
+          </div>
           <div className="tags">
-            <span className="tag intent">{result.intent}</span>
             {result.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
             {result.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
             {result.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
           </div>
-        </Section>
-      )}
-
-      {/* Input Guard */}
-      {result.input_guard && result.input_guard.flag_count > 0 && (
-        <div style={{
-          padding: '8px 12px', marginBottom: 12, borderRadius: 6, fontSize: '0.8rem',
-          background: result.input_guard.verdict === 'warn' ? '#fb923c18' : '#ef444418',
-          border: `1px solid ${result.input_guard.verdict === 'warn' ? '#fb923c44' : '#ef444444'}`,
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: 4, color: result.input_guard.verdict === 'warn' ? '#fb923c' : '#ef4444' }}>
-            Input Guard: {result.input_guard.verdict.toUpperCase()} ({result.input_guard.flag_count} flag{result.input_guard.flag_count !== 1 ? 's' : ''})
-          </div>
-          {result.input_guard.flags.map((f, i) => (
-            <div key={i} style={{ color: 'var(--text-dim)' }}>
-              <span style={{ color: f.severity === 'warn' ? '#fb923c' : '#ef4444', fontWeight: 600, fontSize: '0.7rem', textTransform: 'uppercase' }}>{f.severity}</span>
-              {' '}{f.description}{f.pattern ? ` — "${f.pattern}"` : ''}
-            </div>
-          ))}
         </div>
       )}
 
-      {/* Responses with output checks */}
-      {result.slots.map((slot, i) => {
-        const check = result.output_checks?.[i];
-        return (
-          <Section key={i} title={slotDisplayLabel(slot)} titleStyle={{ borderLeft: `3px solid ${getModeColor(slot.mode)}`, paddingLeft: 8 }}>
-            {check && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                {check.grounding && check.grounding.confidence !== null && (
-                  <span style={{
-                    fontSize: '0.65rem', padding: '1px 6px', borderRadius: 3, fontFamily: 'var(--font-mono, monospace)',
-                    background: check.grounding.grounded ? '#22c55e22' : '#fb923c22',
-                    color: check.grounding.grounded ? '#22c55e' : '#fb923c',
-                    border: `1px solid ${check.grounding.grounded ? '#22c55e44' : '#fb923c44'}`,
-                  }} title={check.grounding.reason}>
-                    Grounding: {(check.grounding.confidence * 100).toFixed(0)}%
-                    {check.grounding.ungrounded_references && check.grounding.ungrounded_references.length > 0 &&
-                      ` (${check.grounding.ungrounded_references.length} unverified ref${check.grounding.ungrounded_references.length !== 1 ? 's' : ''})`
-                    }
-                  </span>
-                )}
-                {check.risk_flags.map((rf, j) => (
-                  <span key={j} style={{
-                    fontSize: '0.65rem', padding: '1px 6px', borderRadius: 3, fontFamily: 'var(--font-mono, monospace)',
-                    background: rf.category === 'dual_use' ? '#ef444422' : rf.category === 'safety_critical' ? '#fb923c22' : '#3b82f622',
-                    color: rf.category === 'dual_use' ? '#ef4444' : rf.category === 'safety_critical' ? '#fb923c' : '#3b82f6',
-                    border: `1px solid ${rf.category === 'dual_use' ? '#ef444444' : rf.category === 'safety_critical' ? '#fb923c44' : '#3b82f644'}`,
-                  }} title={rf.excerpt}>
-                    {rf.category}: {rf.description}
-                  </span>
+      {/* Step 5: Semantic Prefilter */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Semantic Prefilter</div>
+      </div>
+
+      {/* Step 6: Score Neurons + Spread Activation */}
+      {hasNeurons && (
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">
+            Score &amp; Spread Activation
+            <span className="step-timing">{result.neurons_activated} activated</span>
+          </div>
+          <div style={{ height: 500 }}>
+            <NeuronTreeViz
+              queryId={result.query_id}
+              neuronScores={result.neuron_scores}
+              onNavigateToNeuron={onNavigateToNeuron}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Step 8: Assemble Prompt */}
+      {hasNeurons && (
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">
+            Assemble Prompt
+            <span className="step-timing">{result.neurons_activated} neurons</span>
+          </div>
+        </div>
+      )}
+
+      {/* Step 9: Execute LLM */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">
+          Execute LLM
+          <span className="step-timing">{result.slots.length} slot{result.slots.length !== 1 ? 's' : ''}</span>
+        </div>
+        <Section title={`Responses (${result.slots.length})`} defaultOpen={true}>
+          <div className="output-grid">
+            {result.slots.map((slot, i) => {
+              const check = result.output_checks?.[i];
+              return (
+                <div key={i} className="output-card" style={{ borderLeft: `3px solid ${getModeColor(slot.mode)}` }}>
+                  <div className="output-card-header" style={{ color: getModeColor(slot.mode) }}>
+                    {slotDisplayLabel(slot)}
+                  </div>
+                  {check && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {check.grounding && check.grounding.confidence !== null && (
+                        <span style={{
+                          fontSize: '0.6rem', padding: '1px 5px', borderRadius: 3,
+                          background: check.grounding.grounded ? '#22c55e22' : '#fb923c22',
+                          color: check.grounding.grounded ? '#22c55e' : '#fb923c',
+                        }} title={check.grounding.reason}>
+                          Grounding: {(check.grounding.confidence * 100).toFixed(0)}%
+                        </span>
+                      )}
+                      {check.risk_flags.map((rf, j) => (
+                        <span key={j} style={{
+                          fontSize: '0.6rem', padding: '1px 5px', borderRadius: 3,
+                          background: rf.category === 'dual_use' ? '#ef444422' : '#fb923c22',
+                          color: rf.category === 'dual_use' ? '#ef4444' : '#fb923c',
+                        }} title={rf.excerpt}>
+                          {rf.category}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {slot.error ? (
+                    <div style={{ padding: '8px', background: '#ef444422', borderRadius: 4, color: '#fca5a5', fontSize: '0.82rem' }}>
+                      {slot.response}
+                    </div>
+                  ) : (
+                    <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      </div>
+
+      {/* Step 10: Output Checks */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">
+          Output Checks
+          <span className="step-timing">{result.output_checks?.length ?? 0} checked</span>
+        </div>
+      </div>
+
+      {/* Cost & Tokens */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">
+          Cost &amp; Tokens
+          {totalElapsedMs != null && <span className="step-timing">{(totalElapsedMs / 1000).toFixed(1)}s total</span>}
+        </div>
+        <Section title="Cost & Tokens" defaultOpen={true}>
+          <TokenCharts {...slotsToChartModels(result.slots, result.classify_cost, baseline)} totalElapsedMs={totalElapsedMs} />
+        </Section>
+      </div>
+
+      {/* Step: Compare */}
+      {result.slots.length >= 2 && (
+        <div className="pipeline-step">
+          <div className="pipeline-step-label">Evaluation</div>
+          <Section id="section-compare" title="Compare Outputs" className="eval-card" headerRight={
+            <div className="eval-controls">
+              <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
+                {availableModels.map(m => (
+                  <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
                 ))}
+              </select>
+              <button className="btn btn-sm" onClick={onEval} disabled={evalLoading || !!evalText}>
+                {evalLoading ? 'Evaluating...' : evalText ? 'Evaluated' : 'Compare'}
+              </button>
+            </div>
+          }>
+            {evalText && (
+              <div className="eval-result">
+                <div className="eval-model-tag">Evaluated by {evalMdl}</div>
+                <EvalScoreTable scores={evalScores} winner={evalWinner} slots={result.slots} />
+                <div className="response-text" style={{ marginTop: 12 }}>{evalText}</div>
+                <div className="token-breakdown" style={{ marginTop: 12 }}>
+                  <div className="breakdown-item"><div className="bd-value">{evalIn}</div><div className="bd-label">Eval In</div></div>
+                  <div className="breakdown-item"><div className="bd-value">{evalOut}</div><div className="bd-label">Eval Out</div></div>
+                </div>
+                {evalLearning && evalLearning.outcome !== 'skip' && (
+                  <div style={{
+                    marginTop: 14, padding: '10px 14px', borderRadius: 6,
+                    background: evalLearning.outcome === 'win' ? '#22c55e15' : evalLearning.outcome === 'loss' ? '#ef444415' : '#fbbf2415',
+                    border: `1px solid ${evalLearning.outcome === 'win' ? '#22c55e33' : evalLearning.outcome === 'loss' ? '#ef444433' : '#fbbf2433'}`,
+                  }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: evalLearning.outcome === 'win' ? '#22c55e' : evalLearning.outcome === 'loss' ? '#ef4444' : '#fbbf24', marginBottom: 4 }}>
+                      Synaptic Learning: {evalLearning.outcome.toUpperCase()}
+                      {evalLearning.winner_mode && <span style={{ fontWeight: 400, opacity: 0.7 }}> ({evalLearning.winner_mode})</span>}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', display: 'flex', gap: 16 }}>
+                      <span>{evalLearning.neurons_adjusted} neurons adjusted</span>
+                      <span>avg delta: {evalLearning.avg_delta >= 0 ? '+' : ''}{evalLearning.avg_delta.toFixed(4)}</span>
+                      {evalLearning.edges_adjusted > 0 && <span>{evalLearning.edges_adjusted} edges accelerated</span>}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-            {slot.error ? (
-              <div style={{ padding: '12px 16px', background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, color: '#fca5a5', fontSize: '0.85rem' }}>
-                {slot.response}
-              </div>
-            ) : (
-              <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
             )}
           </Section>
-        );
-      })}
+        </div>
+      )}
 
-      {/* Token Charts */}
-      <Section title="Cost & Tokens">
-        <TokenCharts {...slotsToChartModels(result.slots, result.classify_cost, baseline)} totalElapsedMs={totalElapsedMs} />
-      </Section>
+      {/* Step: Refine */}
+      <div className="pipeline-step">
+        <div className="pipeline-step-label">Refine</div>
+        <Section title="Refine Neurons" defaultOpen={false}>
+          <RefinePanel queryId={result.query_id} hasEval={!!evalText} hasNeurons={hasNeurons} onRunAgain={onRunAgain} onPhaseChange={onRefinePhaseChange} initialRefineResult={initialRefineResult} onNavigateToNeuron={onNavigateToNeuron} />
+        </Section>
+      </div>
 
-      {/* Compare */}
-      {result.slots.length >= 2 && (
-        <Section id="section-compare" title="Compare Outputs" className="eval-card" headerRight={
-          <div className="eval-controls">
-            <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
-              {availableModels.map(m => (
-                <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
-              ))}
-            </select>
-            <button className="btn btn-sm" onClick={onEval} disabled={evalLoading || !!evalText}>
-              {evalLoading ? 'Evaluating...' : evalText ? 'Evaluated' : 'Compare Outputs'}
-            </button>
-          </div>
-        }>
-          {evalText && (
-            <div className="eval-result">
-              <div className="eval-model-tag">Evaluated by {evalMdl}</div>
-              <EvalScoreTable scores={evalScores} winner={evalWinner} slots={result.slots} />
-              <div className="response-text" style={{ marginTop: 12 }}>{evalText}</div>
-              <div className="token-breakdown" style={{ marginTop: 12 }}>
-                <div className="breakdown-item"><div className="bd-value">{evalIn}</div><div className="bd-label">Eval In</div></div>
-                <div className="breakdown-item"><div className="bd-value">{evalOut}</div><div className="bd-label">Eval Out</div></div>
-              </div>
-              {evalLearning && evalLearning.outcome !== 'skip' && (
-                <div style={{
-                  marginTop: 14, padding: '10px 14px', borderRadius: 6,
-                  background: evalLearning.outcome === 'win' ? '#22c55e15' : evalLearning.outcome === 'loss' ? '#ef444415' : '#fbbf2415',
-                  border: `1px solid ${evalLearning.outcome === 'win' ? '#22c55e33' : evalLearning.outcome === 'loss' ? '#ef444433' : '#fbbf2433'}`,
-                }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: evalLearning.outcome === 'win' ? '#22c55e' : evalLearning.outcome === 'loss' ? '#ef4444' : '#fbbf24', marginBottom: 4 }}>
-                    Synaptic Learning: {evalLearning.outcome.toUpperCase()}
-                    {evalLearning.winner_mode && <span style={{ fontWeight: 400, opacity: 0.7 }}> ({evalLearning.winner_mode})</span>}
-                  </div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', display: 'flex', gap: 16 }}>
-                    <span>{evalLearning.neurons_adjusted} neurons adjusted</span>
-                    <span>avg delta: {evalLearning.avg_delta >= 0 ? '+' : ''}{evalLearning.avg_delta.toFixed(4)}</span>
-                    {evalLearning.edges_adjusted > 0 && <span>{evalLearning.edges_adjusted} edges accelerated</span>}
-                  </div>
-                </div>
-              )}
+      {/* Step: Export & Rate */}
+      <div className="pipeline-step">
+        <div className="pipeline-step-label">Export &amp; Rate</div>
+        <div className="pipeline-branch">
+          {result.slots.length >= 1 && (
+            <div>
+              <button className="btn btn-sm" onClick={() => {
+                const lines: string[] = [];
+                lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '',
+                  'You are evaluating multiple AI-generated answers to the same prompt.',
+                  'Each answer is labeled with a letter (A, B, C, etc.).', '',
+                  'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5 scale).', '');
+                lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', `User query: ${baseline}`, '');
+                result.slots.forEach((slot, i) => {
+                  lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, '');
+                });
+                if (evalScores.length > 0) {
+                  lines.push('='.repeat(80), 'INTERNAL EVALUATION', '='.repeat(80), '');
+                  lines.push('Dimension'.padEnd(16) + evalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join(''));
+                  for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) {
+                    lines.push((dim.charAt(0).toUpperCase() + dim.slice(1)).padEnd(16) + evalScores.map(s => `${s[dim]}/5`.padEnd(12)).join(''));
+                  }
+                  if (evalWinner) lines.push('', `Internal winner: Answer ${evalWinner}`);
+                  if (evalText) lines.push('', evalText);
+                }
+                lines.push('', '='.repeat(80), 'END', '='.repeat(80));
+                const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                a.download = `corvus-blind-eval-q${result.query_id}.txt`; a.click();
+              }}>
+                Export Blind Evaluation
+              </button>
             </div>
           )}
-        </Section>
-      )}
-
-      <RefinePanel queryId={result.query_id} hasEval={!!evalText} hasNeurons={hasNeurons} onRunAgain={onRunAgain} onPhaseChange={onRefinePhaseChange} initialRefineResult={initialRefineResult} onNavigateToNeuron={onNavigateToNeuron} />
-
-      {result.slots.length >= 1 && (
-        <Section title="Export for External Review">
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: 12 }}>
-            Download a blind evaluation file for an external model (e.g., ChatGPT). Answers are labeled A/B/C with no model identification.
-          </p>
-          <button className="btn btn-sm" onClick={() => {
-            const lines: string[] = [];
-            lines.push('='.repeat(80));
-            lines.push('BLIND EVALUATION REQUEST');
-            lines.push('='.repeat(80));
-            lines.push('');
-            lines.push('You are evaluating multiple AI-generated answers to the same prompt.');
-            lines.push('Each answer is labeled with a letter (A, B, C, etc.). You do not know');
-            lines.push('which model produced which answer.');
-            lines.push('');
-            lines.push('Score each answer on the following dimensions (1-5 scale):');
-            lines.push('');
-            lines.push('  Accuracy      - Are the facts, standards, and procedures correct?');
-            lines.push('  Completeness  - Does it cover all relevant aspects of the question?');
-            lines.push('  Clarity       - Is it well-organized and easy to follow?');
-            lines.push('  Faithfulness  - Does it avoid hallucinated facts or made-up references?');
-            lines.push('  Overall       - Holistic quality considering all dimensions above.');
-            lines.push('');
-            lines.push('After scoring, select a winner (the best overall answer).');
-            lines.push('Provide a brief justification for your scores and winner selection.');
-            lines.push('');
-            lines.push('='.repeat(80));
-            lines.push('PROMPT');
-            lines.push('='.repeat(80));
-            lines.push('');
-            lines.push(`User query: ${baseline}`);
-            lines.push('');
-
-            result.slots.forEach((slot, i) => {
-              const label = String.fromCharCode(65 + i);
-              lines.push('='.repeat(80));
-              lines.push(`ANSWER ${label}`);
-              lines.push('='.repeat(80));
-              lines.push('');
-              lines.push(slot.response);
-              lines.push('');
-            });
-
-            if (evalScores.length > 0) {
-              lines.push('='.repeat(80));
-              lines.push('INTERNAL EVALUATION (for comparison — do not let this bias your scoring)');
-              lines.push('='.repeat(80));
-              lines.push('');
-              lines.push('Dimension'.padEnd(16) + evalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join(''));
-              lines.push('-'.repeat(16 + evalScores.length * 12));
-              for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) {
-                const label = dim.charAt(0).toUpperCase() + dim.slice(1);
-                lines.push(label.padEnd(16) + evalScores.map(s => `${s[dim]}/5`.padEnd(12)).join(''));
-              }
-              lines.push('');
-              if (evalWinner) {
-                lines.push(`Internal winner: Answer ${evalWinner}`);
-              }
-              if (evalText) {
-                lines.push('');
-                lines.push('Internal verdict:');
-                lines.push(evalText);
-              }
-            }
-
-            lines.push('');
-            lines.push('='.repeat(80));
-            lines.push('END OF EVALUATION FILE');
-            lines.push('='.repeat(80));
-
-            const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `corvus-blind-eval-q${result.query_id}.txt`;
-            a.click();
-            URL.revokeObjectURL(url);
-          }}>
-            Export Blind Evaluation (.txt)
-          </button>
-        </Section>
-      )}
-
-      <Section title="Rate Response">
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <button
-            className="btn btn-sm"
-            style={{ fontSize: '1.1rem', padding: '4px 12px', background: rated && rating >= 0.7 ? '#22c55e33' : undefined, border: rated && rating >= 0.7 ? '1px solid #22c55e' : undefined }}
-            onClick={() => { setRating(0.85); }}
-            disabled={rated}
-            title="Good response (0.85)"
-          >
-            {'👍'}
-          </button>
-          <button
-            className="btn btn-sm"
-            style={{ fontSize: '1.1rem', padding: '4px 12px', background: rated && rating < 0.3 ? '#ef444433' : undefined, border: rated && rating < 0.3 ? '1px solid #ef4444' : undefined }}
-            onClick={() => { setRating(0.15); }}
-            disabled={rated}
-            title="Poor response (0.15)"
-          >
-            {'👎'}
-          </button>
-          <button className="btn btn-sm" onClick={onRate} disabled={rated} style={{ marginLeft: 'auto' }}>{rated ? 'Rated!' : 'Submit Rating'}</button>
+          <div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating >= 0.7 ? '#22c55e33' : undefined }} onClick={() => setRating(0.85)} disabled={rated}>{'👍'}</button>
+              <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating < 0.3 ? '#ef444433' : undefined }} onClick={() => setRating(0.15)} disabled={rated}>{'👎'}</button>
+              <input type="range" min="0" max="1" step="0.05" value={rating} onChange={e => setRating(parseFloat(e.target.value))} disabled={rated} style={{ flex: 1 }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{rating.toFixed(2)}</span>
+              <button className="btn btn-sm" onClick={onRate} disabled={rated}>{rated ? 'Rated' : 'Rate'}</button>
+            </div>
+          </div>
         </div>
-        <div className="rating-row">
-          <input type="range" min="0" max="1" step="0.05" value={rating} onChange={e => setRating(parseFloat(e.target.value))} disabled={rated} />
-          <span className="rating-value">{rating.toFixed(2)}</span>
-        </div>
-      </Section>
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -1607,245 +1433,233 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
   const hasNeurons = query.neuron_hits.length > 0;
 
   return (
-    <>
-      <div className="result-card">
-        <h3>
+    <div className="pipeline-flow">
+      {/* Step: Query */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">
           Query #{query.id}
-          <span className="history-modes" style={{ marginLeft: 8 }}>
-            {query.slots.map((s, i) => {
-              const label = slotDisplayLabel(s);
-              return <span key={i} className="mode-badge" style={{ background: (getModeColor(s.mode)) + '33', color: getModeColor(s.mode) }}>{label}</span>;
-            })}
-          </span>
-        </h3>
-        <div className="response-text" style={{ marginBottom: 12, position: 'relative' }}>
-          {query.user_message}
-          <button
-            className="copy-btn"
-            title="Copy prompt"
-            onClick={() => {
-              navigator.clipboard.writeText(query.user_message);
-            }}
-          >
-            Copy
-          </button>
+          {query.created_at && <span className="step-timing">{new Date(query.created_at).toLocaleString()}</span>}
         </div>
-        {hasNeurons && (
+        <Section title={query.user_message.slice(0, 80) + (query.user_message.length > 80 ? '...' : '')} defaultOpen={false}>
+          <div className="response-text" style={{ position: 'relative' }}>
+            {query.user_message}
+            <button className="copy-btn" title="Copy prompt" onClick={() => navigator.clipboard.writeText(query.user_message)}>Copy</button>
+          </div>
+          {hasNeurons && (
+            <div className="tags" style={{ marginTop: 8 }}>
+              {query.classified_intent && <span className="tag intent">{query.classified_intent}</span>}
+              {query.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
+              {query.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
+              {query.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
+            </div>
+          )}
+        </Section>
+      </div>
+
+      {/* Step: Input Guard */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">
+          Input Guard
+          <span className="step-timing">pass</span>
+        </div>
+      </div>
+
+      {/* Step: Structural Resolve */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Structural Resolve</div>
+      </div>
+
+      {/* Step: Embed Query */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Embed Query</div>
+      </div>
+
+      {/* Step: Classify */}
+      {hasNeurons && query.classified_intent && (
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">
+            Classify
+            <span className="step-timing">{query.classified_intent}</span>
+          </div>
           <div className="tags">
-            {query.classified_intent && <span className="tag intent">{query.classified_intent}</span>}
             {query.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
             {query.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
             {query.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
           </div>
-        )}
-        {query.created_at && <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 8 }}>{new Date(query.created_at).toLocaleString()}</div>}
+        </div>
+      )}
+
+      {/* Step: Semantic Prefilter */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Semantic Prefilter</div>
       </div>
 
-      {hasNeurons && (
-        <Section title={`Neuron Hits (${query.neuron_hits.length} neurons activated)`} defaultOpen={false}>
-          <table className="score-table">
-            <thead>
-              <tr><th>ID</th><th>Neuron</th><th>Layer</th><th>Dept</th><th>Combined</th><th>Spread</th><th>Burst</th><th>Impact</th><th>Precision</th><th>Novelty</th><th>Recency</th><th>Relevance</th></tr>
-            </thead>
-            <tbody>
-              {query.neuron_hits.map(h => (
-                <tr key={h.neuron_id}>
-                  <td>{h.neuron_id}</td>
-                  <td style={{ color: layerColors[h.layer], maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.label}</td>
-                  <td><span style={{ color: layerColors[h.layer] }}>L{h.layer}</span></td>
-                  <td style={{ fontSize: '0.75rem' }}>{h.department ?? '—'}</td>
-                  <td><strong>{h.combined.toFixed(3)}</strong></td>
-                  <td style={h.spread_boost > 0 ? { color: '#e8a735', fontWeight: 600 } : undefined}>{h.spread_boost > 0 ? h.spread_boost.toFixed(3) : '—'}</td>
-                  <td>{h.burst.toFixed(3)}</td>
-                  <td>{h.impact.toFixed(3)}</td>
-                  <td>{h.precision.toFixed(3)}</td>
-                  <td>{h.novelty.toFixed(3)}</td>
-                  <td>{h.recency.toFixed(3)}</td>
-                  <td>{h.relevance.toFixed(3)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      )}
-
+      {/* Step: Score & Spread Activation */}
       {query.neuron_hits.length > 0 && (
-        <Section title="Activation Graph" defaultOpen={false}>
-          <div style={{ height: 500 }}>
-            <NeuronTreeViz
-              queryId={query.id}
-              neuronScores={query.neuron_hits.map(h => ({
-                neuron_id: h.neuron_id, combined: h.combined, burst: h.burst,
-                impact: h.impact, precision: h.precision, novelty: h.novelty,
-                recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost,
-                label: h.label, department: h.department, layer: h.layer,
-                parent_id: h.parent_id, summary: h.summary,
-              }))}
-              onNavigateToNeuron={onNavigateToNeuron}
-            />
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">
+            Score &amp; Spread Activation
+            <span className="step-timing">{query.neuron_hits.length} activated</span>
           </div>
-        </Section>
-      )}
-
-      {/* Responses */}
-      {query.slots.map((slot, i) => (
-        <Section key={i} title={slotDisplayLabel(slot)} titleStyle={{ borderLeft: `3px solid ${getModeColor(slot.mode)}`, paddingLeft: 8 }}>
-          {slot.error ? (
-            <div style={{ padding: '12px 16px', background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, color: '#fca5a5', fontSize: '0.85rem' }}>
-              {slot.response}
+          <Section title="Activation Graph" defaultOpen={false}>
+            <div style={{ height: 500 }}>
+              <NeuronTreeViz
+                queryId={query.id}
+                neuronScores={query.neuron_hits.map(h => ({
+                  neuron_id: h.neuron_id, combined: h.combined, burst: h.burst,
+                  impact: h.impact, precision: h.precision, novelty: h.novelty,
+                  recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost,
+                  label: h.label, department: h.department, layer: h.layer,
+                  parent_id: h.parent_id, summary: h.summary,
+                }))}
+                onNavigateToNeuron={onNavigateToNeuron}
+              />
             </div>
-          ) : (
-            <div className="response-text">{slot.response}</div>
-          )}
-        </Section>
-      ))}
-
-      {/* Token Charts */}
-      {query.slots.length > 0 && (
-        <Section title="Cost & Tokens">
-          <TokenCharts {...slotsToChartModels(query.slots, query.classify_cost, baseline)} />
-        </Section>
+          </Section>
+        </div>
       )}
 
-      {/* Compare */}
-      {query.slots.length >= 2 && (
-        <Section title="Compare Outputs" className="eval-card" headerRight={
-          <div className="eval-controls">
-            <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
-              {availableModels.map(m => (
-                <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
-              ))}
-            </select>
-            <button className="btn btn-sm" onClick={handleEval} disabled={evalLoading}>
-              {evalLoading ? 'Evaluating...' : localEvalText ? 'Re-evaluate' : 'Compare Outputs'}
-            </button>
+      {/* Step: Assemble Prompt */}
+      {hasNeurons && (
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">
+            Assemble Prompt
+            <span className="step-timing">{query.neuron_hits.length} neurons</span>
           </div>
-        }>
-          {localEvalText && (
-            <div className="eval-result">
-              <div className="eval-model-tag">Evaluated by {localEvalMdl}</div>
-              <EvalScoreTable scores={localEvalScores} winner={localEvalWinner} slots={query.slots} />
-              <div className="response-text" style={{ marginTop: 12 }}>{localEvalText}</div>
-              <div className="token-breakdown" style={{ marginTop: 12 }}>
-                <div className="breakdown-item"><div className="bd-value">{localEvalIn}</div><div className="bd-label">Eval In</div></div>
-                <div className="breakdown-item"><div className="bd-value">{localEvalOut}</div><div className="bd-label">Eval Out</div></div>
+        </div>
+      )}
+
+      {/* Step: Execute LLM */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">
+          Execute LLM
+          <span className="step-timing">{query.slots.length} slot{query.slots.length !== 1 ? 's' : ''}</span>
+        </div>
+        <Section title={`Responses (${query.slots.length})`} defaultOpen={false}>
+          <div className="output-grid">
+            {query.slots.map((slot, i) => (
+              <div key={i} className="output-card" style={{ borderLeft: `3px solid ${getModeColor(slot.mode)}` }}>
+                <div className="output-card-header" style={{ color: getModeColor(slot.mode) }}>
+                  {slotDisplayLabel(slot)}
+                </div>
+                {slot.error ? (
+                  <div style={{ padding: '8px', background: '#ef444422', borderRadius: 4, color: '#fca5a5', fontSize: '0.82rem' }}>{slot.response}</div>
+                ) : (
+                  <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
+                )}
               </div>
+            ))}
+          </div>
+        </Section>
+      </div>
+
+      {/* Step: Output Checks */}
+      <div className="pipeline-step pipeline-step-done">
+        <div className="pipeline-step-label">Output Checks</div>
+      </div>
+
+      {/* Step: Cost & Tokens */}
+      {query.slots.length > 0 && (
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">Cost &amp; Tokens</div>
+          <Section title="Cost & Tokens" defaultOpen={false}>
+            <TokenCharts {...slotsToChartModels(query.slots, query.classify_cost, baseline)} />
+          </Section>
+        </div>
+      )}
+
+      {/* Step: Evaluation */}
+      {query.slots.length >= 2 && (
+        <div className="pipeline-step">
+          <div className="pipeline-step-label">Evaluation</div>
+          <Section title="Compare Outputs" className="eval-card" headerRight={
+            <div className="eval-controls">
+              <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
+                {availableModels.map(m => (
+                  <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
+                ))}
+              </select>
+              <button className="btn btn-sm" onClick={handleEval} disabled={evalLoading}>
+                {evalLoading ? 'Evaluating...' : localEvalText ? 'Re-evaluate' : 'Compare'}
+              </button>
             </div>
+          }>
+            {localEvalText && (
+              <div className="eval-result">
+                <div className="eval-model-tag">Evaluated by {localEvalMdl}</div>
+                <EvalScoreTable scores={localEvalScores} winner={localEvalWinner} slots={query.slots} />
+                <div className="response-text" style={{ marginTop: 12 }}>{localEvalText}</div>
+                <div className="token-breakdown" style={{ marginTop: 12 }}>
+                  <div className="breakdown-item"><div className="bd-value">{localEvalIn}</div><div className="bd-label">Eval In</div></div>
+                  <div className="breakdown-item"><div className="bd-value">{localEvalOut}</div><div className="bd-label">Eval Out</div></div>
+                </div>
+              </div>
+            )}
+          </Section>
+        </div>
+      )}
+
+      {/* Step: Refine */}
+      <div className="pipeline-step">
+        <div className="pipeline-step-label">Refine</div>
+        <Section title="Refine Neurons" defaultOpen={false}>
+          <RefinePanel queryId={query.id} hasEval={!!localEvalText} hasNeurons={hasNeurons} initialRefineResult={query.pending_refine} onNavigateToNeuron={onNavigateToNeuron} />
+        </Section>
+      </div>
+
+      {/* Step: Export */}
+      <div className="pipeline-step">
+        <div className="pipeline-step-label">Export</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {query.slots.length >= 1 && (
+            <button className="btn btn-sm" onClick={() => {
+              const lines: string[] = [];
+              lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '',
+                'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5).', '');
+              lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', query.user_message, '');
+              query.slots.forEach((slot, i) => {
+                lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, '');
+              });
+              lines.push('='.repeat(80), 'END', '='.repeat(80));
+              const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+              a.download = `corvus-blind-eval-q${query.id}.txt`; a.click();
+            }}>
+              Export Blind Evaluation
+            </button>
           )}
-        </Section>
-      )}
+          {hasNeurons && query.assembled_prompt && (
+            <button className="btn btn-sm" onClick={() => {
+              const blob = new Blob([query.assembled_prompt!], { type: 'text/plain' });
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+              a.download = `corvus-assembled-prompt-q${query.id}.txt`; a.click();
+            }}>
+              Export Assembled Prompt
+            </button>
+          )}
+        </div>
+      </div>
 
-      {query.slots.length >= 1 && (
-        <Section title="Export for External Review">
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: 12 }}>
-            Download a blind evaluation file for an external model (e.g., ChatGPT). Answers are labeled A/B/C with no model identification.
-          </p>
-          <button className="btn btn-sm" onClick={() => {
-            const lines: string[] = [];
-            lines.push('='.repeat(80));
-            lines.push('BLIND EVALUATION REQUEST');
-            lines.push('='.repeat(80));
-            lines.push('');
-            lines.push('You are evaluating multiple AI-generated answers to the same prompt.');
-            lines.push('Each answer is labeled with a letter (A, B, C, etc.). You do not know');
-            lines.push('which model produced which answer.');
-            lines.push('');
-            lines.push('Score each answer on the following dimensions (1-5 scale):');
-            lines.push('');
-            lines.push('  Accuracy      - Are the facts, standards, and procedures correct?');
-            lines.push('  Completeness  - Does it cover all relevant aspects of the question?');
-            lines.push('  Clarity       - Is it well-organized and easy to follow?');
-            lines.push('  Faithfulness  - Does it avoid hallucinated facts or made-up references?');
-            lines.push('  Overall       - Holistic quality considering all dimensions above.');
-            lines.push('');
-            lines.push('After scoring, select a winner (the best overall answer).');
-            lines.push('Provide a brief justification for your scores and winner selection.');
-            lines.push('');
-            lines.push('='.repeat(80));
-            lines.push('PROMPT');
-            lines.push('='.repeat(80));
-            lines.push('');
-            lines.push(`User query: ${query.user_message}`);
-            lines.push('');
-
-            query.slots.forEach((slot, i) => {
-              const label = String.fromCharCode(65 + i);
-              lines.push('='.repeat(80));
-              lines.push(`ANSWER ${label}`);
-              lines.push('='.repeat(80));
-              lines.push('');
-              lines.push(slot.response);
-              lines.push('');
-            });
-
-            if (localEvalScores.length > 0) {
-              lines.push('='.repeat(80));
-              lines.push('INTERNAL EVALUATION (for comparison — do not let this bias your scoring)');
-              lines.push('='.repeat(80));
-              lines.push('');
-              lines.push('Dimension'.padEnd(16) + localEvalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join(''));
-              lines.push('-'.repeat(16 + localEvalScores.length * 12));
-              for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) {
-                const dimLabel = dim.charAt(0).toUpperCase() + dim.slice(1);
-                lines.push(dimLabel.padEnd(16) + localEvalScores.map(s => `${s[dim]}/5`.padEnd(12)).join(''));
-              }
-              lines.push('');
-              if (localEvalWinner) {
-                lines.push(`Internal winner: Answer ${localEvalWinner}`);
-              }
-              if (localEvalText) {
-                lines.push('');
-                lines.push('Internal verdict:');
-                lines.push(localEvalText);
-              }
-            }
-
-            lines.push('');
-            lines.push('='.repeat(80));
-            lines.push('END OF EVALUATION FILE');
-            lines.push('='.repeat(80));
-
-            const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `corvus-blind-eval-q${query.id}.txt`;
-            a.click();
-            URL.revokeObjectURL(url);
-          }}>
-            Export Blind Evaluation (.txt)
-          </button>
-        </Section>
-      )}
-
-      <RefinePanel queryId={query.id} hasEval={!!localEvalText} hasNeurons={hasNeurons} initialRefineResult={query.pending_refine} onNavigateToNeuron={onNavigateToNeuron} />
-
+      {/* Refinements history */}
       {query.refinements && query.refinements.length > 0 && (
-        <Section title={`Applied Refinements (${query.refinements.length})`} defaultOpen={true}>
+        <div className="pipeline-step pipeline-step-done">
+          <div className="pipeline-step-label">Applied Refinements ({query.refinements.length})</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {query.refinements.map(r => (
               <div key={r.id} style={{
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 6,
-                padding: '10px 14px',
+                background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 6, padding: '10px 14px',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <span style={{
-                    fontSize: '0.7rem',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    fontWeight: 600,
+                    fontSize: '0.7rem', padding: '2px 6px', borderRadius: 3, fontWeight: 600,
                     background: r.action === 'create' ? 'rgba(34,197,94,0.15)' : 'rgba(250,204,21,0.15)',
                     color: r.action === 'create' ? '#22c55e' : '#facc15',
                   }}>
                     {r.action === 'create' ? 'CREATED' : 'UPDATED'}
                   </span>
-                  <span
-                    style={{ fontSize: '0.85rem', color: 'var(--text-bright, #e0e0e0)', cursor: onNavigateToNeuron ? 'pointer' : undefined }}
-                    onClick={onNavigateToNeuron ? () => onNavigateToNeuron(r.neuron_id) : undefined}
-                    title={onNavigateToNeuron ? 'View in Explorer' : undefined}
-                  >
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-bright, #e0e0e0)', cursor: onNavigateToNeuron ? 'pointer' : undefined }}
+                    onClick={onNavigateToNeuron ? () => onNavigateToNeuron(r.neuron_id) : undefined}>
                     <span style={{ color: '#60a5fa', textDecoration: onNavigateToNeuron ? 'underline' : undefined }}>#{r.neuron_id}</span> {r.neuron_label ?? ''}
                   </span>
                   {r.field && <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>{r.field}</span>}
@@ -1863,14 +1677,8 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
               </div>
             ))}
           </div>
-        </Section>
+        </div>
       )}
-
-      {hasNeurons && query.assembled_prompt && (
-        <Section title="Assembled System Prompt" defaultOpen={false}>
-          <div className="response-text">{query.assembled_prompt}</div>
-        </Section>
-      )}
-    </>
+    </div>
   );
 }
