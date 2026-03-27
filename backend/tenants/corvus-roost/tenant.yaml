@@ -1,0 +1,12 @@
+display_name: "Corvus Roost"
+default_port: 8005
+description: "Commercial real estate property management intelligence engine. Two-stage Haiku pipeline encoding tenant risk profiling, LOI negotiation, regulatory compliance, and asset management across a multi-state portfolio."
+system_use_banner: >-
+  Corvus Roost — Commercial Real Estate Intelligence Engine.
+  This system encodes property management knowledge including tenant risk profiling,
+  lease negotiation frameworks, regulatory compliance, and building operations.
+  Content is reference-only and does not replace licensed professional judgment
+  or legal counsel. Financial projections are estimates, not guarantees.
+semantic_prefilter_enabled: true
+regulatory_department_name: "Legal & Regulatory Compliance"
+reseed_threshold: 80

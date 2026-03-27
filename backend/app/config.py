@@ -1,8 +1,16 @@
 from pydantic_settings import BaseSettings
 
 
+def _default_database_url() -> str:
+    """Derive database URL from TENANT_ID. DB name = tenant ID with hyphens as underscores."""
+    import os
+    tid = os.environ.get("TENANT_ID", "corvus-aero")
+    db_name = tid.replace("-", "_")
+    return f"postgresql+asyncpg://yggdrasil:yggdrasil@localhost:5432/{db_name}"
+
+
 class Settings(BaseSettings):
-    database_url: str  # Required — set via DATABASE_URL env var or .env file
+    database_url: str = ""  # Auto-derived from TENANT_ID if not set
     anthropic_api_key: str = ""
     google_api_key: str = ""
     groq_api_key: str = ""
@@ -93,6 +101,11 @@ class Settings(BaseSettings):
     outcome_loss_cofire_multiplier: int = 0
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    def model_post_init(self, __context) -> None:
+        """Fill database_url from tenant ID if not explicitly provided."""
+        if not self.database_url:
+            object.__setattr__(self, "database_url", _default_database_url())
 
 
 settings = Settings()
