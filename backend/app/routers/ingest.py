@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Neuron, NeuronEdge, NeuronRefinement, ObservationQueue
-from app.services.llm_provider import llm_chat
+from app.services.claude_cli import claude_chat as llm_chat
 from app.schemas import ObservationEvalRequest, ObservationBatchEvalRequest, ObservationApplyRequest
 from app.services.reference_hooks import populate_external_references
 

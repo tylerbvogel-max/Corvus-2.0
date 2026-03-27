@@ -566,7 +566,7 @@ async def ingest_source(
       - role_key: str | None (target role)
       - queue_entry_id: int | None (if resolving an emergent queue entry)
     """
-    from app.services.llm_provider import llm_chat
+    from app.services.claude_cli import claude_chat as llm_chat
 
     source_text, citation, source_type, department, role_key, queue_entry_id = _validate_ingest_body(body)
     parent_neuron = await _find_parent_neuron(db, role_key, department)
@@ -907,7 +907,7 @@ def _enrich_batch_proposals(proposals: list[dict], state: dict) -> None:
 
 async def _run_batch_ingest(job_id: str, start_chunk: int = 0):
     """Background task: process chunks sequentially through the chosen model."""
-    from app.services.llm_provider import llm_chat
+    from app.services.claude_cli import claude_chat as llm_chat
 
     state = await _load_batch_job_state(job_id)
     if not state:

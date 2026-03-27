@@ -18,7 +18,15 @@ from app.schemas import (
     LearningEventOut, LearningAnalytics,
 )
 from app.services.executor import execute_query, prepare_context
-from app.services.llm_provider import llm_chat, estimate_cost, get_available_models, MODEL_REGISTRY, get_valid_model_names
+from app.services.claude_cli import claude_chat as llm_chat, estimate_cost, MODEL_REGISTRY
+
+
+def get_available_models() -> list[dict]:
+    return [{"display_name": n, "provider": "anthropic", "api_id": m.api_id, "tier": "frontier", "input_price": m.input_price, "output_price": m.output_price} for n, m in MODEL_REGISTRY.items()]
+
+
+def get_valid_model_names() -> set[str]:
+    return set(MODEL_REGISTRY.keys())
 from app.services.neuron_service import get_system_state, score_candidates
 from app.services.scoring_engine import update_impact_ema
 from app.services.input_guard import check_input, check_output_risk, check_output_grounding

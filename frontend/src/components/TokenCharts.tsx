@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react'
-import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js'
+import { useEffect, useRef, useState } from 'react'
+import { Chart, BarController, BarElement, CategoryScale, LinearScale, LogarithmicScale, Tooltip, Legend } from 'chart.js'
 
-Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
+Chart.register(BarController, BarElement, CategoryScale, LinearScale, LogarithmicScale, Tooltip, Legend);
 
 interface ModelTokens {
   label: string;
@@ -30,11 +30,23 @@ function formatDuration(ms: number): string {
   return `${m}m ${rem.toFixed(0)}s`;
 }
 
+/** Darken a hex color by mixing toward black */
+function darkenColor(hex: string, amount: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const dr = Math.max(0, Math.round(r * (1 - amount)));
+  const dg = Math.max(0, Math.round(g * (1 - amount)));
+  const db = Math.max(0, Math.round(b * (1 - amount)));
+  return `#${dr.toString(16).padStart(2, '0')}${dg.toString(16).padStart(2, '0')}${db.toString(16).padStart(2, '0')}`;
+}
+
 export default function TokenCharts({ models, baseline, totalElapsedMs }: { models: ModelTokens[]; baseline: string; totalElapsedMs?: number }) {
   const tokenRef = useRef<HTMLCanvasElement>(null);
   const costRef = useRef<HTMLCanvasElement>(null);
   const tokenChart = useRef<Chart | null>(null);
   const costChart = useRef<Chart | null>(null);
+  const [logScale, setLogScale] = useState(false);
 
   useEffect(() => {
     const labels = models.map(m => m.label);
@@ -44,11 +56,12 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
     const textDimColor = style.getPropertyValue('--text-dim').trim() || '#c8d0dc';
     const gridColor = style.getPropertyValue('--border').trim() || '#1e2d4a';
 
-    // Baseline data for cost tooltip
     const baselineSlot = models.find(m => m.mode === baseline);
     const baselineCost = baselineSlot?.cost ?? 0;
     const baselineTotalTokens = baselineSlot ? baselineSlot.inputTokens + baselineSlot.outputTokens : 0;
     const baselineTPD = baselineCost > 0 ? baselineTotalTokens / baselineCost : 0;
+
+    const yScaleType = logScale ? 'logarithmic' as const : 'linear' as const;
 
     // ── Stacked Token Chart ──
     if (tokenRef.current) {
@@ -69,8 +82,8 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
             {
               label: 'Output Tokens',
               data: models.map(m => m.outputTokens),
-              backgroundColor: colors.map(c => c + '77'),
-              borderColor: colors,
+              backgroundColor: colors.map(c => darkenColor(c.replace(/[^#0-9a-fA-F]/g, '').slice(0, 7), 0.4) + 'cc'),
+              borderColor: colors.map(c => darkenColor(c.replace(/[^#0-9a-fA-F]/g, '').slice(0, 7), 0.5)),
               borderWidth: 1,
               borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
             },
@@ -87,30 +100,30 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
             },
             tooltip: {
               callbacks: {
-                label: (ctx) => {
-                  const val = (ctx.parsed.y ?? 0).toLocaleString();
-                  return `${ctx.dataset.label}: ${val} tokens`;
-                },
+                label: (ctx) => `${ctx.dataset.label}: ${(ctx.parsed.y ?? 0).toLocaleString()} tokens`,
                 afterBody: (items) => {
                   const idx = items[0]?.dataIndex;
                   if (idx == null) return '';
                   const m = models[idx];
-                  const total = m.inputTokens + m.outputTokens;
-                  return `Total: ${total.toLocaleString()} tokens`;
+                  return `Total: ${(m.inputTokens + m.outputTokens).toLocaleString()} tokens`;
                 },
               },
             },
           },
           scales: {
             y: {
-              stacked: true,
-              beginAtZero: true,
+              type: yScaleType,
+              stacked: !logScale,
+              beginAtZero: !logScale,
               title: { display: true, text: 'Tokens', color: textDimColor, font: { size: 11 } },
-              ticks: { color: textDimColor },
+              ticks: {
+                color: textDimColor,
+                maxTicksLimit: 12,
+              },
               grid: { color: gridColor },
             },
             x: {
-              stacked: true,
+              stacked: !logScale,
               ticks: { color: textColor, font: { weight: 'bold' }, maxRotation: 45, minRotation: 0 },
               grid: { display: false },
             },
@@ -150,7 +163,6 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
                   const totalTokens = m.inputTokens + m.outputTokens;
                   const tpd = m.cost > 0 ? totalTokens / m.cost : 0;
                   const lines = [`${formatTokensPerDollar(tpd)} tokens/$`];
-
                   if (baselineSlot && m.mode !== baseline && baselineCost > 0) {
                     const diff = m.cost - baselineCost;
                     const pct = (diff / baselineCost) * 100;
@@ -159,13 +171,10 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
                     lines.push(`vs ${baselineSlot.label}:`);
                     lines.push(`${cheaper ? '' : '+'}${pct.toFixed(0)}% (${cheaper ? 'cheaper' : 'more expensive'})`);
                     if (baselineTPD > 0) {
-                      const mult = tpd / baselineTPD;
-                      lines.push(`${mult.toFixed(1)}x tokens/$ efficiency`);
+                      lines.push(`${(tpd / baselineTPD).toFixed(1)}x tokens/$ efficiency`);
                     }
                   }
-                  if (m.durationMs > 0) {
-                    lines.push(`${formatDuration(m.durationMs)}`);
-                  }
+                  if (m.durationMs > 0) lines.push(`${formatDuration(m.durationMs)}`);
                   return lines;
                 },
               },
@@ -173,10 +182,12 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
           },
           scales: {
             y: {
-              beginAtZero: true,
+              type: yScaleType,
+              beginAtZero: !logScale,
               title: { display: true, text: 'Cost (USD)', color: textDimColor, font: { size: 11 } },
               ticks: {
                 color: textDimColor,
+                maxTicksLimit: 10,
                 callback: (value) => `$${Number(value).toFixed(4)}`,
               },
               grid: { color: gridColor },
@@ -194,20 +205,26 @@ export default function TokenCharts({ models, baseline, totalElapsedMs }: { mode
       tokenChart.current?.destroy();
       costChart.current?.destroy();
     };
-  }, [models, baseline]);
+  }, [models, baseline, logScale]);
 
   const totalCost = models.reduce((sum, m) => sum + m.cost, 0);
 
   return (
     <div className="token-charts">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+        <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input type="checkbox" checked={logScale} onChange={e => setLogScale(e.target.checked)} />
+          Log scale
+        </label>
+      </div>
       <div className="token-charts-grid">
         <div className="token-chart-box">
           <div className="token-chart-title">Tokens by Model</div>
-          <div className="token-chart-canvas"><canvas ref={tokenRef} /></div>
+          <div className="token-chart-canvas" style={{ height: 280 }}><canvas ref={tokenRef} /></div>
         </div>
         <div className="token-chart-box">
           <div className="token-chart-title">Cost by Model</div>
-          <div className="token-chart-canvas"><canvas ref={costRef} /></div>
+          <div className="token-chart-canvas" style={{ height: 280 }}><canvas ref={costRef} /></div>
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: 8 }}>

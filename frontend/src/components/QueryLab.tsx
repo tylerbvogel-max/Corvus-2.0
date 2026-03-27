@@ -799,8 +799,8 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [refinePhase, setRefinePhase] = useState<RefinePhase>('idle');
   const [liveRefineRestore, setLiveRefineRestore] = useState<RefineResponse | null>(null);
-  const [, setStageStatuses] = useState<Record<string, StageEvent>>({});
-  const [, setStageTimes] = useState<Record<string, number>>({});
+  const [/* stageStatuses */, setStageStatuses] = useState<Record<string, StageEvent>>({});
+  const [stageTimes, setStageTimes] = useState<Record<string, number>>({});
   const stageTimestamps = useRef<Record<string, number>>({});
   const [configCollapsed, setConfigCollapsed] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
@@ -1109,6 +1109,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             onRunAgain={handleRunAgain} onRefinePhaseChange={setRefinePhase}
             initialRefineResult={liveRefineRestore}
             onNavigateToNeuron={onNavigateToNeuron}
+            stageTimes={stageTimes}
           />
         )}
 
@@ -1118,9 +1119,95 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   );
 }
 
+/** Pipeline step wrapper — renders gutter (dot + line) and content as grid cells */
+function PStep({ status = 'done', children }: { status?: 'done' | 'active' | 'pending'; children: ReactNode }) {
+  return (
+    <div className={`pipeline-step pipeline-step-${status}`}>
+      <div className="pipeline-gutter"><div className="pipeline-dot" /></div>
+      <div className="pipeline-content">{children}</div>
+    </div>
+  );
+}
+
+/** SVG overlay that draws connector curves between pipeline dots by measuring actual positions */
+function PipelineConnectors({ containerRef }: { containerRef: React.RefObject<HTMLDivElement | null> }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  const drawConnectors = useCallback(() => {
+    const container = containerRef.current;
+    const svg = svgRef.current;
+    if (!container || !svg) return;
+
+    const dots = container.querySelectorAll<HTMLElement>('.pipeline-dot');
+    if (dots.length < 2) return;
+
+    const containerRect = container.getBoundingClientRect();
+    svg.setAttribute('width', '40');
+    svg.setAttribute('height', String(containerRect.height));
+    svg.setAttribute('viewBox', `0 0 40 ${containerRect.height}`);
+
+    // Clear existing paths
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    // Draw L-shaped curve between each consecutive pair of dots
+    for (let i = 0; i < dots.length - 1; i++) {
+      const dotA = dots[i];
+      const dotB = dots[i + 1];
+      const aRect = dotA.getBoundingClientRect();
+      const bRect = dotB.getBoundingClientRect();
+
+      // Dot centers relative to the gutter column
+      const ax = aRect.left + aRect.width / 2 - containerRect.left;
+      const ay = aRect.top + aRect.height / 2 - containerRect.top;
+      const bx = bRect.left + bRect.width / 2 - containerRect.left;
+      const by = bRect.top + bRect.height / 2 - containerRect.top;
+
+      // L-shaped path: go down from A, curve 90° to B's x, then down to B
+      const midY = by - 10; // curve turn point
+      const r = 8; // corner radius
+
+      let d: string;
+      if (ax < bx) {
+        // A is left, B is right → go down, curve right, go right, curve down
+        d = `M ${ax} ${ay + 6} L ${ax} ${midY - r} Q ${ax} ${midY}, ${ax + r} ${midY} L ${bx - r} ${midY} Q ${bx} ${midY}, ${bx} ${midY + r} L ${bx} ${by - 6}`;
+      } else if (ax > bx) {
+        // A is right, B is left → go down, curve left, go left, curve down
+        d = `M ${ax} ${ay + 6} L ${ax} ${midY - r} Q ${ax} ${midY}, ${ax - r} ${midY} L ${bx + r} ${midY} Q ${bx} ${midY}, ${bx} ${midY + r} L ${bx} ${by - 6}`;
+      } else {
+        // Same x → straight line
+        d = `M ${ax} ${ay + 6} L ${bx} ${by - 6}`;
+      }
+
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', 'var(--accent, #38bdf8)');
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('stroke-opacity', '0.15');
+      svg.appendChild(path);
+    }
+  }, [containerRef]);
+
+  useEffect(() => {
+    drawConnectors();
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => drawConnectors());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [drawConnectors, containerRef]);
+
+  return (
+    <svg
+      ref={svgRef}
+      style={{ position: 'absolute', top: 0, left: 0, width: 40, pointerEvents: 'none', zIndex: 1 }}
+    />
+  );
+}
+
 // ────────── Live Result ──────────
 
-function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron }: {
+function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
   result: QueryResponse; baseline: string; totalElapsedMs?: number;
   rating: number; setRating: (v: number) => void; rated: boolean; onRate: () => void;
   evalText: string | null; evalMdl: string | null; evalIn: number; evalOut: number;
@@ -1131,27 +1218,29 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
   onRunAgain: () => void; onRefinePhaseChange: (phase: RefinePhase) => void;
   initialRefineResult?: RefineResponse | null;
   onNavigateToNeuron?: (id: number) => void;
+  stageTimes?: Record<string, number>;
 }) {
   const hasNeurons = result.neuron_scores.length > 0;
   const { models: availableModels } = useModels();
+  const pipelineRef = useRef<HTMLDivElement>(null);
 
   const guardVerdict = result.input_guard?.verdict;
   const guardPass = !result.input_guard || result.input_guard.flag_count === 0;
 
+  function stageTime(key: string): string | undefined {
+    const ms = stageTimes?.[key];
+    if (ms == null) return undefined;
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
   return (
-    <div className="pipeline-flow">
-      {/* Step 1: Input Guard */}
-      <div className={`pipeline-step ${guardPass ? 'pipeline-step-done' : ''}`}>
-        <div className="pipeline-step-label">
-          Input Guard
-          <span className="step-timing">{guardPass ? 'pass' : guardVerdict?.toUpperCase()}</span>
-        </div>
+    <div className="pipeline-flow" ref={pipelineRef} style={{ position: 'relative' }}>
+      <PipelineConnectors containerRef={pipelineRef} />
+      <PStep status={guardPass ? 'done' : 'done'}>
+        <div className="pipeline-step-label">Input Guard <span className="step-timing">{guardPass ? 'pass' : guardVerdict?.toUpperCase()}{stageTime('input_guard') && ` · ${stageTime('input_guard')}`}</span></div>
         {result.input_guard && result.input_guard.flag_count > 0 && (
-          <div style={{
-            padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem',
-            background: guardVerdict === 'warn' ? '#fb923c18' : '#ef444418',
-            border: `1px solid ${guardVerdict === 'warn' ? '#fb923c44' : '#ef444444'}`,
-          }}>
+          <div style={{ padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem', background: guardVerdict === 'warn' ? '#fb923c18' : '#ef444418', border: `1px solid ${guardVerdict === 'warn' ? '#fb923c44' : '#ef444444'}` }}>
             {result.input_guard.flags.map((f, i) => (
               <div key={i} style={{ color: 'var(--text-dim)' }}>
                 <span style={{ color: f.severity === 'warn' ? '#fb923c' : '#ef4444', fontWeight: 600, fontSize: '0.7rem', textTransform: 'uppercase' }}>{f.severity}</span>
@@ -1160,71 +1249,41 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
             ))}
           </div>
         )}
-      </div>
+      </PStep>
 
-      {/* Step 2: Structural Resolve */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Structural Resolve</div>
-      </div>
+      <PStep><div className="pipeline-step-label">Structural Resolve{stageTime('structural_resolve') && <span className="step-timing">{stageTime('structural_resolve')}</span>}</div></PStep>
+      <PStep><div className="pipeline-step-label">Embed Query{stageTime('embed_query') && <span className="step-timing">{stageTime('embed_query')}</span>}</div></PStep>
 
-      {/* Step 3: Embed Query */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Embed Query</div>
-      </div>
-
-      {/* Step 4: Classify */}
       {hasNeurons && result.intent && (
-        <div className="pipeline-step pipeline-step-done">
-          <div className="pipeline-step-label">
-            Classify
-            <span className="step-timing">{result.intent}</span>
-          </div>
+        <PStep>
+          <div className="pipeline-step-label">Classify <span className="step-timing">{result.intent}{stageTime('classify') && ` · ${stageTime('classify')}`}</span></div>
           <div className="tags">
             {result.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
             {result.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
             {result.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
           </div>
-        </div>
+        </PStep>
       )}
 
-      {/* Step 5: Semantic Prefilter */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Semantic Prefilter</div>
-      </div>
+      <PStep><div className="pipeline-step-label">Semantic Prefilter{stageTime('semantic_prefilter') && <span className="step-timing">{stageTime('semantic_prefilter')}</span>}</div></PStep>
 
-      {/* Step 6: Score Neurons + Spread Activation */}
       {hasNeurons && (
-        <div className="pipeline-step pipeline-step-done">
-          <div className="pipeline-step-label">
-            Score &amp; Spread Activation
-            <span className="step-timing">{result.neurons_activated} activated</span>
-          </div>
+        <PStep>
+          <div className="pipeline-step-label">Score &amp; Spread Activation <span className="step-timing">{result.neurons_activated} activated{stageTime('score_neurons') && ` · ${stageTime('score_neurons')}`}{stageTime('spread_activation') && ` + ${stageTime('spread_activation')}`}</span></div>
           <div style={{ height: 500 }}>
-            <NeuronTreeViz
-              queryId={result.query_id}
-              neuronScores={result.neuron_scores}
-              onNavigateToNeuron={onNavigateToNeuron}
-            />
+            <NeuronTreeViz queryId={result.query_id} neuronScores={result.neuron_scores} onNavigateToNeuron={onNavigateToNeuron} />
           </div>
-        </div>
+        </PStep>
       )}
 
-      {/* Step 8: Assemble Prompt */}
       {hasNeurons && (
-        <div className="pipeline-step pipeline-step-done">
-          <div className="pipeline-step-label">
-            Assemble Prompt
-            <span className="step-timing">{result.neurons_activated} neurons</span>
-          </div>
-        </div>
+        <PStep>
+          <div className="pipeline-step-label">Assemble Prompt <span className="step-timing">{result.neurons_activated} neurons{stageTime('assemble_prompt') && ` · ${stageTime('assemble_prompt')}`}</span></div>
+        </PStep>
       )}
 
-      {/* Step 9: Execute LLM */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">
-          Execute LLM
-          <span className="step-timing">{result.slots.length} slot{result.slots.length !== 1 ? 's' : ''}</span>
-        </div>
+      <PStep>
+        <div className="pipeline-step-label">Execute LLM <span className="step-timing">{result.slots.length} slot{result.slots.length !== 1 ? 's' : ''}{stageTime('execute_llm') && ` · ${stageTime('execute_llm')}`}</span></div>
         <Section title={`Responses (${result.slots.length})`} defaultOpen={true}>
           <div className="output-grid">
             {result.slots.map((slot, i) => {
@@ -1268,30 +1327,21 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
             })}
           </div>
         </Section>
-      </div>
+      </PStep>
 
-      {/* Step 10: Output Checks */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">
-          Output Checks
-          <span className="step-timing">{result.output_checks?.length ?? 0} checked</span>
-        </div>
-      </div>
+      <PStep>
+        <div className="pipeline-step-label">Output Checks <span className="step-timing">{result.output_checks?.length ?? 0} checked{stageTime('output_checks') && ` · ${stageTime('output_checks')}`}</span></div>
+      </PStep>
 
-      {/* Cost & Tokens */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">
-          Cost &amp; Tokens
-          {totalElapsedMs != null && <span className="step-timing">{(totalElapsedMs / 1000).toFixed(1)}s total</span>}
-        </div>
+      <PStep>
+        <div className="pipeline-step-label">Cost &amp; Tokens {totalElapsedMs != null && <span className="step-timing">{(totalElapsedMs / 1000).toFixed(1)}s total</span>}</div>
         <Section title="Cost & Tokens" defaultOpen={true}>
           <TokenCharts {...slotsToChartModels(result.slots, result.classify_cost, baseline)} totalElapsedMs={totalElapsedMs} />
         </Section>
-      </div>
+      </PStep>
 
-      {/* Step: Compare */}
       {result.slots.length >= 2 && (
-        <div className="pipeline-step">
+        <PStep>
           <div className="pipeline-step-label">Evaluation</div>
           <Section id="section-compare" title="Compare Outputs" className="eval-card" headerRight={
             <div className="eval-controls">
@@ -1315,11 +1365,7 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
                   <div className="breakdown-item"><div className="bd-value">{evalOut}</div><div className="bd-label">Eval Out</div></div>
                 </div>
                 {evalLearning && evalLearning.outcome !== 'skip' && (
-                  <div style={{
-                    marginTop: 14, padding: '10px 14px', borderRadius: 6,
-                    background: evalLearning.outcome === 'win' ? '#22c55e15' : evalLearning.outcome === 'loss' ? '#ef444415' : '#fbbf2415',
-                    border: `1px solid ${evalLearning.outcome === 'win' ? '#22c55e33' : evalLearning.outcome === 'loss' ? '#ef444433' : '#fbbf2433'}`,
-                  }}>
+                  <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 6, background: evalLearning.outcome === 'win' ? '#22c55e15' : evalLearning.outcome === 'loss' ? '#ef444415' : '#fbbf2415', border: `1px solid ${evalLearning.outcome === 'win' ? '#22c55e33' : evalLearning.outcome === 'loss' ? '#ef444433' : '#fbbf2433'}` }}>
                     <div style={{ fontSize: '0.75rem', fontWeight: 600, color: evalLearning.outcome === 'win' ? '#22c55e' : evalLearning.outcome === 'loss' ? '#ef4444' : '#fbbf24', marginBottom: 4 }}>
                       Synaptic Learning: {evalLearning.outcome.toUpperCase()}
                       {evalLearning.winner_mode && <span style={{ fontWeight: 400, opacity: 0.7 }}> ({evalLearning.winner_mode})</span>}
@@ -1334,62 +1380,37 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
               </div>
             )}
           </Section>
-        </div>
+        </PStep>
       )}
 
-      {/* Step: Refine */}
-      <div className="pipeline-step">
+      <PStep>
         <div className="pipeline-step-label">Refine</div>
         <Section title="Refine Neurons" defaultOpen={false}>
           <RefinePanel queryId={result.query_id} hasEval={!!evalText} hasNeurons={hasNeurons} onRunAgain={onRunAgain} onPhaseChange={onRefinePhaseChange} initialRefineResult={initialRefineResult} onNavigateToNeuron={onNavigateToNeuron} />
         </Section>
-      </div>
+      </PStep>
 
-      {/* Step: Export & Rate */}
-      <div className="pipeline-step">
+      <PStep>
         <div className="pipeline-step-label">Export &amp; Rate</div>
-        <div className="pipeline-branch">
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           {result.slots.length >= 1 && (
-            <div>
-              <button className="btn btn-sm" onClick={() => {
-                const lines: string[] = [];
-                lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '',
-                  'You are evaluating multiple AI-generated answers to the same prompt.',
-                  'Each answer is labeled with a letter (A, B, C, etc.).', '',
-                  'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5 scale).', '');
-                lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', `User query: ${baseline}`, '');
-                result.slots.forEach((slot, i) => {
-                  lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, '');
-                });
-                if (evalScores.length > 0) {
-                  lines.push('='.repeat(80), 'INTERNAL EVALUATION', '='.repeat(80), '');
-                  lines.push('Dimension'.padEnd(16) + evalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join(''));
-                  for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) {
-                    lines.push((dim.charAt(0).toUpperCase() + dim.slice(1)).padEnd(16) + evalScores.map(s => `${s[dim]}/5`.padEnd(12)).join(''));
-                  }
-                  if (evalWinner) lines.push('', `Internal winner: Answer ${evalWinner}`);
-                  if (evalText) lines.push('', evalText);
-                }
-                lines.push('', '='.repeat(80), 'END', '='.repeat(80));
-                const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-                const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-                a.download = `corvus-blind-eval-q${result.query_id}.txt`; a.click();
-              }}>
-                Export Blind Evaluation
-              </button>
-            </div>
+            <button className="btn btn-sm" onClick={() => {
+              const lines: string[] = [];
+              lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '', 'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5).', '');
+              lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', `User query: ${baseline}`, '');
+              result.slots.forEach((slot, i) => { lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, ''); });
+              if (evalScores.length > 0) { lines.push('='.repeat(80), 'INTERNAL EVALUATION', '='.repeat(80), ''); lines.push('Dimension'.padEnd(16) + evalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join('')); for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) { lines.push((dim.charAt(0).toUpperCase() + dim.slice(1)).padEnd(16) + evalScores.map(s => `${s[dim]}/5`.padEnd(12)).join('')); } if (evalWinner) lines.push('', `Internal winner: Answer ${evalWinner}`); if (evalText) lines.push('', evalText); }
+              lines.push('', '='.repeat(80), 'END', '='.repeat(80));
+              const blob = new Blob([lines.join('\n')], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `corvus-blind-eval-q${result.query_id}.txt`; a.click();
+            }}>Export Blind Evaluation</button>
           )}
-          <div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating >= 0.7 ? '#22c55e33' : undefined }} onClick={() => setRating(0.85)} disabled={rated}>{'👍'}</button>
-              <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating < 0.3 ? '#ef444433' : undefined }} onClick={() => setRating(0.15)} disabled={rated}>{'👎'}</button>
-              <input type="range" min="0" max="1" step="0.05" value={rating} onChange={e => setRating(parseFloat(e.target.value))} disabled={rated} style={{ flex: 1 }} />
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{rating.toFixed(2)}</span>
-              <button className="btn btn-sm" onClick={onRate} disabled={rated}>{rated ? 'Rated' : 'Rate'}</button>
-            </div>
-          </div>
+          <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating >= 0.7 ? '#22c55e33' : undefined }} onClick={() => setRating(0.85)} disabled={rated}>{'👍'}</button>
+          <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating < 0.3 ? '#ef444433' : undefined }} onClick={() => setRating(0.15)} disabled={rated}>{'👎'}</button>
+          <input type="range" min="0" max="1" step="0.05" value={rating} onChange={e => setRating(parseFloat(e.target.value))} disabled={rated} style={{ width: 80 }} />
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{rating.toFixed(2)}</span>
+          <button className="btn btn-sm" onClick={onRate} disabled={rated}>{rated ? 'Rated' : 'Rate'}</button>
         </div>
-      </div>
+      </PStep>
     </div>
   );
 }
@@ -1431,157 +1452,85 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
   }
 
   const hasNeurons = query.neuron_hits.length > 0;
+  const histPipelineRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="pipeline-flow">
-      {/* Step: Query */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">
-          Query #{query.id}
-          {query.created_at && <span className="step-timing">{new Date(query.created_at).toLocaleString()}</span>}
-        </div>
+    <div className="pipeline-flow" ref={histPipelineRef} style={{ position: 'relative' }}>
+      <PipelineConnectors containerRef={histPipelineRef} />
+      <PStep>
+        <div className="pipeline-step-label">Query #{query.id} {query.created_at && <span className="step-timing">{new Date(query.created_at).toLocaleString()}</span>}</div>
         <Section title={query.user_message.slice(0, 80) + (query.user_message.length > 80 ? '...' : '')} defaultOpen={false}>
-          <div className="response-text" style={{ position: 'relative' }}>
-            {query.user_message}
+          <div className="response-text" style={{ position: 'relative' }}>{query.user_message}
             <button className="copy-btn" title="Copy prompt" onClick={() => navigator.clipboard.writeText(query.user_message)}>Copy</button>
           </div>
-          {hasNeurons && (
-            <div className="tags" style={{ marginTop: 8 }}>
-              {query.classified_intent && <span className="tag intent">{query.classified_intent}</span>}
-              {query.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
-              {query.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
-              {query.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
-            </div>
-          )}
         </Section>
-      </div>
+      </PStep>
 
-      {/* Step: Input Guard */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">
-          Input Guard
-          <span className="step-timing">pass</span>
-        </div>
-      </div>
+      <PStep><div className="pipeline-step-label">Input Guard <span className="step-timing">pass</span></div></PStep>
+      <PStep><div className="pipeline-step-label">Structural Resolve</div></PStep>
+      <PStep><div className="pipeline-step-label">Embed Query</div></PStep>
 
-      {/* Step: Structural Resolve */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Structural Resolve</div>
-      </div>
-
-      {/* Step: Embed Query */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Embed Query</div>
-      </div>
-
-      {/* Step: Classify */}
       {hasNeurons && query.classified_intent && (
-        <div className="pipeline-step pipeline-step-done">
-          <div className="pipeline-step-label">
-            Classify
-            <span className="step-timing">{query.classified_intent}</span>
-          </div>
+        <PStep>
+          <div className="pipeline-step-label">Classify <span className="step-timing">{query.classified_intent}</span></div>
           <div className="tags">
             {query.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
             {query.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
             {query.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
           </div>
-        </div>
+        </PStep>
       )}
 
-      {/* Step: Semantic Prefilter */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Semantic Prefilter</div>
-      </div>
+      <PStep><div className="pipeline-step-label">Semantic Prefilter</div></PStep>
 
-      {/* Step: Score & Spread Activation */}
       {query.neuron_hits.length > 0 && (
-        <div className="pipeline-step pipeline-step-done">
-          <div className="pipeline-step-label">
-            Score &amp; Spread Activation
-            <span className="step-timing">{query.neuron_hits.length} activated</span>
-          </div>
+        <PStep>
+          <div className="pipeline-step-label">Score &amp; Spread Activation <span className="step-timing">{query.neuron_hits.length} activated</span></div>
           <Section title="Activation Graph" defaultOpen={false}>
             <div style={{ height: 500 }}>
-              <NeuronTreeViz
-                queryId={query.id}
-                neuronScores={query.neuron_hits.map(h => ({
-                  neuron_id: h.neuron_id, combined: h.combined, burst: h.burst,
-                  impact: h.impact, precision: h.precision, novelty: h.novelty,
-                  recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost,
-                  label: h.label, department: h.department, layer: h.layer,
-                  parent_id: h.parent_id, summary: h.summary,
-                }))}
-                onNavigateToNeuron={onNavigateToNeuron}
-              />
+              <NeuronTreeViz queryId={query.id} neuronScores={query.neuron_hits.map(h => ({ neuron_id: h.neuron_id, combined: h.combined, burst: h.burst, impact: h.impact, precision: h.precision, novelty: h.novelty, recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost, label: h.label, department: h.department, layer: h.layer, parent_id: h.parent_id, summary: h.summary }))} onNavigateToNeuron={onNavigateToNeuron} />
             </div>
           </Section>
-        </div>
+        </PStep>
       )}
 
-      {/* Step: Assemble Prompt */}
-      {hasNeurons && (
-        <div className="pipeline-step pipeline-step-done">
-          <div className="pipeline-step-label">
-            Assemble Prompt
-            <span className="step-timing">{query.neuron_hits.length} neurons</span>
-          </div>
-        </div>
-      )}
+      {hasNeurons && <PStep><div className="pipeline-step-label">Assemble Prompt <span className="step-timing">{query.neuron_hits.length} neurons</span></div></PStep>}
 
-      {/* Step: Execute LLM */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">
-          Execute LLM
-          <span className="step-timing">{query.slots.length} slot{query.slots.length !== 1 ? 's' : ''}</span>
-        </div>
+      <PStep>
+        <div className="pipeline-step-label">Execute LLM <span className="step-timing">{query.slots.length} slot{query.slots.length !== 1 ? 's' : ''}</span></div>
         <Section title={`Responses (${query.slots.length})`} defaultOpen={false}>
           <div className="output-grid">
             {query.slots.map((slot, i) => (
               <div key={i} className="output-card" style={{ borderLeft: `3px solid ${getModeColor(slot.mode)}` }}>
-                <div className="output-card-header" style={{ color: getModeColor(slot.mode) }}>
-                  {slotDisplayLabel(slot)}
-                </div>
-                {slot.error ? (
-                  <div style={{ padding: '8px', background: '#ef444422', borderRadius: 4, color: '#fca5a5', fontSize: '0.82rem' }}>{slot.response}</div>
-                ) : (
-                  <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
-                )}
+                <div className="output-card-header" style={{ color: getModeColor(slot.mode) }}>{slotDisplayLabel(slot)}</div>
+                {slot.error ? <div style={{ padding: '8px', background: '#ef444422', borderRadius: 4, color: '#fca5a5', fontSize: '0.82rem' }}>{slot.response}</div>
+                  : <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />}
               </div>
             ))}
           </div>
         </Section>
-      </div>
+      </PStep>
 
-      {/* Step: Output Checks */}
-      <div className="pipeline-step pipeline-step-done">
-        <div className="pipeline-step-label">Output Checks</div>
-      </div>
+      <PStep><div className="pipeline-step-label">Output Checks</div></PStep>
 
-      {/* Step: Cost & Tokens */}
       {query.slots.length > 0 && (
-        <div className="pipeline-step pipeline-step-done">
+        <PStep>
           <div className="pipeline-step-label">Cost &amp; Tokens</div>
           <Section title="Cost & Tokens" defaultOpen={false}>
             <TokenCharts {...slotsToChartModels(query.slots, query.classify_cost, baseline)} />
           </Section>
-        </div>
+        </PStep>
       )}
 
-      {/* Step: Evaluation */}
       {query.slots.length >= 2 && (
-        <div className="pipeline-step">
+        <PStep>
           <div className="pipeline-step-label">Evaluation</div>
           <Section title="Compare Outputs" className="eval-card" headerRight={
             <div className="eval-controls">
               <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
-                {availableModels.map(m => (
-                  <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
-                ))}
+                {availableModels.map(m => (<option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>))}
               </select>
-              <button className="btn btn-sm" onClick={handleEval} disabled={evalLoading}>
-                {evalLoading ? 'Evaluating...' : localEvalText ? 'Re-evaluate' : 'Compare'}
-              </button>
+              <button className="btn btn-sm" onClick={handleEval} disabled={evalLoading}>{evalLoading ? 'Evaluating...' : localEvalText ? 'Re-evaluate' : 'Compare'}</button>
             </div>
           }>
             {localEvalText && (
@@ -1596,88 +1545,57 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
               </div>
             )}
           </Section>
-        </div>
+        </PStep>
       )}
 
-      {/* Step: Refine */}
-      <div className="pipeline-step">
+      <PStep>
         <div className="pipeline-step-label">Refine</div>
         <Section title="Refine Neurons" defaultOpen={false}>
           <RefinePanel queryId={query.id} hasEval={!!localEvalText} hasNeurons={hasNeurons} initialRefineResult={query.pending_refine} onNavigateToNeuron={onNavigateToNeuron} />
         </Section>
-      </div>
+      </PStep>
 
-      {/* Step: Export */}
-      <div className="pipeline-step">
+      <PStep>
         <div className="pipeline-step-label">Export</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {query.slots.length >= 1 && (
             <button className="btn btn-sm" onClick={() => {
               const lines: string[] = [];
-              lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '',
-                'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5).', '');
+              lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '', 'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5).', '');
               lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', query.user_message, '');
-              query.slots.forEach((slot, i) => {
-                lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, '');
-              });
+              query.slots.forEach((slot, i) => { lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, ''); });
               lines.push('='.repeat(80), 'END', '='.repeat(80));
-              const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-              a.download = `corvus-blind-eval-q${query.id}.txt`; a.click();
-            }}>
-              Export Blind Evaluation
-            </button>
+              const blob = new Blob([lines.join('\n')], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `corvus-blind-eval-q${query.id}.txt`; a.click();
+            }}>Export Blind Evaluation</button>
           )}
           {hasNeurons && query.assembled_prompt && (
             <button className="btn btn-sm" onClick={() => {
-              const blob = new Blob([query.assembled_prompt!], { type: 'text/plain' });
-              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-              a.download = `corvus-assembled-prompt-q${query.id}.txt`; a.click();
-            }}>
-              Export Assembled Prompt
-            </button>
+              const blob = new Blob([query.assembled_prompt!], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `corvus-assembled-prompt-q${query.id}.txt`; a.click();
+            }}>Export Assembled Prompt</button>
           )}
         </div>
-      </div>
+      </PStep>
 
-      {/* Refinements history */}
       {query.refinements && query.refinements.length > 0 && (
-        <div className="pipeline-step pipeline-step-done">
+        <PStep>
           <div className="pipeline-step-label">Applied Refinements ({query.refinements.length})</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {query.refinements.map(r => (
-              <div key={r.id} style={{
-                background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 6, padding: '10px 14px',
-              }}>
+              <div key={r.id} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '10px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{
-                    fontSize: '0.7rem', padding: '2px 6px', borderRadius: 3, fontWeight: 600,
-                    background: r.action === 'create' ? 'rgba(34,197,94,0.15)' : 'rgba(250,204,21,0.15)',
-                    color: r.action === 'create' ? '#22c55e' : '#facc15',
-                  }}>
-                    {r.action === 'create' ? 'CREATED' : 'UPDATED'}
-                  </span>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-bright, #e0e0e0)', cursor: onNavigateToNeuron ? 'pointer' : undefined }}
-                    onClick={onNavigateToNeuron ? () => onNavigateToNeuron(r.neuron_id) : undefined}>
+                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: 3, fontWeight: 600, background: r.action === 'create' ? 'rgba(34,197,94,0.15)' : 'rgba(250,204,21,0.15)', color: r.action === 'create' ? '#22c55e' : '#facc15' }}>{r.action === 'create' ? 'CREATED' : 'UPDATED'}</span>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-bright, #e0e0e0)', cursor: onNavigateToNeuron ? 'pointer' : undefined }} onClick={onNavigateToNeuron ? () => onNavigateToNeuron(r.neuron_id) : undefined}>
                     <span style={{ color: '#60a5fa', textDecoration: onNavigateToNeuron ? 'underline' : undefined }}>#{r.neuron_id}</span> {r.neuron_label ?? ''}
                   </span>
                   {r.field && <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>{r.field}</span>}
                 </div>
-                {r.action === 'update' && r.old_value && r.new_value && (
-                  <div style={{ fontSize: '0.8rem', marginTop: 4 }}>
-                    <div style={{ color: '#f87171', opacity: 0.7 }}>{r.old_value.length > 200 ? r.old_value.slice(0, 200) + '...' : r.old_value}</div>
-                    <div style={{ color: '#4ade80', marginTop: 2 }}>{r.new_value.length > 200 ? r.new_value.slice(0, 200) + '...' : r.new_value}</div>
-                  </div>
-                )}
-                {r.action === 'create' && r.new_value && (
-                  <div style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: 4 }}>{r.new_value}</div>
-                )}
+                {r.action === 'update' && r.old_value && r.new_value && (<div style={{ fontSize: '0.8rem', marginTop: 4 }}><div style={{ color: '#f87171', opacity: 0.7 }}>{r.old_value.length > 200 ? r.old_value.slice(0, 200) + '...' : r.old_value}</div><div style={{ color: '#4ade80', marginTop: 2 }}>{r.new_value.length > 200 ? r.new_value.slice(0, 200) + '...' : r.new_value}</div></div>)}
+                {r.action === 'create' && r.new_value && (<div style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: 4 }}>{r.new_value}</div>)}
                 {r.reason && <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 4 }}>{r.reason}</div>}
               </div>
             ))}
           </div>
-        </div>
+        </PStep>
       )}
     </div>
   );

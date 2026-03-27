@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.models import Neuron, Query, NeuronEdge
 from app.services.classifier import classify_query
-from app.services.llm_provider import llm_chat, MODEL_REGISTRY
+from app.services.claude_cli import claude_chat as llm_chat, MODEL_REGISTRY
 from app.services.neuron_service import (
     get_neurons_by_filter,
     get_system_state,
