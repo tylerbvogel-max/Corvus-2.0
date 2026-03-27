@@ -4,8 +4,7 @@ import type { SlotSpec, GraphCapacity, StageEvent, ModelOption } from '../api'
 import type { QueryResponse, QuerySummary, QueryDetail, SlotResult, EvalScoreOut, RefineResponse } from '../types'
 import { useModels } from '../hooks/useModels'
 import TokenCharts from './TokenCharts'
-import SpreadTrail from './SpreadTrail'
-import ChatNeuronViz from './ChatNeuronViz'
+import NeuronTreeViz from './NeuronTreeViz'
 import { marked } from 'marked'
 
 const layerColors = ['var(--layer0)', 'var(--layer1)', 'var(--layer2)', 'var(--layer3)', 'var(--layer4)', 'var(--layer5)'];
@@ -1321,13 +1320,13 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
   return (
     <>
       {hasNeurons && (
-        <ChatNeuronViz
-          queryId={result.query_id}
-          neuronScores={result.neuron_scores}
-          neuronsActivated={result.neurons_activated}
-          onNavigateToNeuron={onNavigateToNeuron}
-          fullSize
-        />
+        <div style={{ height: 500, marginBottom: 16 }}>
+          <NeuronTreeViz
+            queryId={result.query_id}
+            neuronScores={result.neuron_scores}
+            onNavigateToNeuron={onNavigateToNeuron}
+          />
+        </div>
       )}
 
       {hasNeurons && result.intent && (
@@ -1672,13 +1671,19 @@ function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDe
 
       {query.neuron_hits.length > 0 && (
         <Section title="Activation Graph" defaultOpen={false}>
-          <SpreadTrail queryId={query.id} neuronScores={query.neuron_hits.map(h => ({
-            neuron_id: h.neuron_id, combined: h.combined, burst: h.burst,
-            impact: h.impact, precision: h.precision, novelty: h.novelty,
-            recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost,
-            label: h.label, department: h.department, layer: h.layer,
-            parent_id: h.parent_id, summary: h.summary,
-          }))} onNavigateToNeuron={onNavigateToNeuron} />
+          <div style={{ height: 500 }}>
+            <NeuronTreeViz
+              queryId={query.id}
+              neuronScores={query.neuron_hits.map(h => ({
+                neuron_id: h.neuron_id, combined: h.combined, burst: h.burst,
+                impact: h.impact, precision: h.precision, novelty: h.novelty,
+                recency: h.recency, relevance: h.relevance, spread_boost: h.spread_boost,
+                label: h.label, department: h.department, layer: h.layer,
+                parent_id: h.parent_id, summary: h.summary,
+              }))}
+              onNavigateToNeuron={onNavigateToNeuron}
+            />
+          </div>
         </Section>
       )}
 

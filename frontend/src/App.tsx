@@ -31,12 +31,12 @@ import KnowledgeGovernancePage from './components/KnowledgeGovernancePage'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import SigmaGraphPage from './components/SigmaGraphPage'
-import VisualGraphExperiment from './components/VisualGraphExperiment'
+
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'visual-graph' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'synaptic-learning' | 'knowledge-governance';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'synaptic-learning' | 'knowledge-governance';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -67,7 +67,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: 'Query',
     items: [
       { key: 'query', label: 'Query Lab' },
-      { key: 'visual-graph', label: 'Visual Graph' },
       { key: 'samples', label: 'Samples' },
     ],
   },
@@ -305,7 +304,7 @@ export default function App() {
         )}
         {tab === 'layer-heatmap' && <LayerHeatmap />}
         <div style={{ display: tab === 'query' ? 'contents' : 'none' }}><QueryLab onNavigateToNeuron={navigateToNeuron} /></div>
-        {tab === 'visual-graph' && <VisualGraphExperiment />}
+
         {tab === 'pipeline' && <PipelinePage />}
         {tab === 'evaluation' && <EvaluationPage />}
         {tab === 'refinements' && <RefinementHistory />}
