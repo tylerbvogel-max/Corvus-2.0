@@ -19,7 +19,7 @@ from app.config import settings
 from app.database import engine, async_session
 from app.models import Base, Neuron, SystemState, BatchJob, SourceDocument, NeuronSourceLink, ManagementReview, ComplianceSnapshot, EvidenceMapping, ObservationQueue
 from app.models_corvus import CorvusKnownApp, CorvusSession
-from app.routers import query, neurons, admin, autopilot, performance, provenance, compliance, ingest, corvus
+from app.routers import query, neurons, admin, autopilot, performance, provenance, compliance, ingest, corvus, chat_sessions
 from app.compliance.router import router as compliance_suite_router
 from app.compliance.models import ComplianceSuiteRun, ComplianceProviderResult, ComplianceAttestation  # noqa: F401 — for create_all
 from app.seed.loader import load_seed
@@ -479,6 +479,43 @@ async def _seed_core_data():
             print(f"Marked {len(interrupted)} batch job(s) as interrupted")
 
 
+async def _auto_embed_neurons():
+    """Embed any neurons missing embeddings on startup using batch encoding."""
+    import asyncio
+    import json
+
+    async with async_session() as db:
+        rows = (await db.execute(
+            select(Neuron).where(
+                Neuron.is_active == True,  # noqa: E712
+                (Neuron.embedding == None) | (Neuron.embedding == ""),  # noqa: E711
+            )
+        )).scalars().all()
+
+        if not rows:
+            return
+
+        print(f"Auto-embedding {len(rows)} neurons missing embeddings...")
+
+        from app.services.embedding_service import embed_batch
+
+        texts = [f"{n.label} {n.content or ''}"[:1000] for n in rows]
+        loop = asyncio.get_running_loop()
+        vectors = await loop.run_in_executor(None, embed_batch, texts)
+
+        for neuron, vec in zip(rows, vectors):
+            neuron.embedding = json.dumps(vec)
+
+        await db.commit()
+        print(f"Auto-embedded {len(rows)} neurons")
+
+    try:
+        from app.services.semantic_prefilter import invalidate_cache
+        invalidate_cache()
+    except (ImportError, Exception) as e:
+        logger.warning("Semantic cache invalidation skipped: %s", e)
+
+
 async def _seed_corvus_and_compliance():
     """Seed Corvus apps, initialize Corvus subsystem, seed evidence and compliance."""
     import asyncio
@@ -531,6 +568,7 @@ async def lifespan(app: FastAPI):
     from app.compliance.registry import load_all as load_compliance_registry
     load_compliance_registry()
     await _seed_core_data()
+    await _auto_embed_neurons()
     await _seed_corvus_and_compliance()
     yield
 
@@ -591,6 +629,7 @@ app.include_router(provenance.router)
 app.include_router(compliance.router)
 app.include_router(ingest.router)
 app.include_router(corvus.router)
+app.include_router(chat_sessions.router)
 app.include_router(compliance_suite_router)
 
 
@@ -601,6 +640,7 @@ async def get_tenant():
         "tenant_id": tenant.tenant_id,
         "display_name": tenant.display_name,
         "description": tenant.description,
+        "seed_prompts": tenant.seed_prompts,
     }
 
 

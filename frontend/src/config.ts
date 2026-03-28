@@ -1,9 +1,15 @@
 /** Tenant configuration — fetched once from /tenant on app init. */
 
+export interface SeedPrompt {
+  label: string;
+  text: string;
+}
+
 export interface TenantConfig {
   tenant_id: string;
   display_name: string;
   description: string;
+  seed_prompts?: SeedPrompt[];
 }
 
 export interface TenantSummary {

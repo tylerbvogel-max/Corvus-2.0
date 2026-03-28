@@ -9,3 +9,15 @@ system_use_banner: >-
 semantic_prefilter_enabled: true
 regulatory_department_name: "Historical Record"
 reseed_threshold: 20
+baseline_prompt: "You are an analyst specializing in political behavioral pattern recognition and historical precedent analysis."
+seed_prompts:
+  - label: "Escalation pattern"
+    text: "How does the escalation ladder pattern typically manifest in trade policy disputes?"
+  - label: "Loyalty test"
+    text: "What behavioral signals indicate a loyalty test is being applied to a cabinet appointee?"
+  - label: "Media counter-punch"
+    text: "Analyze the typical counter-punch response pattern to negative media coverage."
+  - label: "Dealmaker framing"
+    text: "How does dealmaker framing differ between bilateral trade negotiations and multilateral summits?"
+  - label: "Historical precedent"
+    text: "What pre-presidency patterns are most predictive of executive decision-making style?"

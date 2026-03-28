@@ -10,3 +10,19 @@ system_use_banner: >-
 semantic_prefilter_enabled: true
 regulatory_department_name: "Legal & Regulatory Compliance"
 reseed_threshold: 80
+baseline_prompt: "I am a property manager at a commercial real estate firm managing office and residential properties across New York, Connecticut, and Arizona."
+seed_prompts:
+  - label: "Tenant risk assessment"
+    text: "EMPOWER Retirement's D&B Viability Rating dropped to 7. What's my risk playbook?"
+  - label: "LOI negotiation"
+    text: "Draft LOI terms for a 3,000 sqft tenant at 280 Trumbull — Class A credit, 5-year term."
+  - label: "LL97 compliance"
+    text: "What's our LL97 penalty exposure for 928 Broadway and what are the cheapest compliance pathways?"
+  - label: "RPIE filing"
+    text: "When is our RPIE filing deadline and what documents do I need to prepare?"
+  - label: "Lease renewal strategy"
+    text: "Prudential's lease at 280 Trumbull expires in 14 months. What's the renewal strategy given current Hartford vacancy rates?"
+  - label: "CAM reconciliation"
+    text: "Walk me through the year-end CAM reconciliation process for 628 Hebron Ave."
+  - label: "Government tenant risk"
+    text: "How should I assess appropriations risk for our state agency tenants at 280 Trumbull?"

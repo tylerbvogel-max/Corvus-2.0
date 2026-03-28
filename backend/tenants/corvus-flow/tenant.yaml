@@ -9,3 +9,15 @@ system_use_banner: >-
 semantic_prefilter_enabled: false
 regulatory_department_name: "Code Compliance"
 reseed_threshold: 40
+baseline_prompt: "I am a plumbing professional working in residential and commercial construction."
+seed_prompts:
+  - label: "Diagnose slow drain"
+    text: "Kitchen sink is draining slowly but the bathroom on the same branch is fine. What should I check?"
+  - label: "Pipe sizing"
+    text: "How do I size the water supply piping for a 3-bathroom residential remodel using the WSFU method?"
+  - label: "Gas line testing"
+    text: "What's the pressure test procedure for new gas piping per NFPA 54?"
+  - label: "Backflow prevention"
+    text: "What type of backflow preventer do I need for a commercial irrigation connection?"
+  - label: "Code compliance"
+    text: "What are the IPC requirements for trap arm length on a 2-inch drain?"

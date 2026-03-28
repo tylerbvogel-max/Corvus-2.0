@@ -301,7 +301,11 @@ NEURON_MODES = frozenset(k for k in MODEL_MAP if k.endswith("_neuron"))
 # OUTPUT FORMAT: Free-form natural-language response (no structured format required).
 # FAILURE MODES: None specific to this prompt. LLM may produce generic or less domain-specific
 #   answers compared to neuron-enhanced slots, which is the expected baseline behavior.
-RAW_BASELINE_PROMPT = "I am an employee at an aerospace manufacturing and prototype design company."
+# Loaded from tenant config — each tenant defines its own baseline context.
+# Falls back to empty string if tenant.yaml omits baseline_prompt.
+def _get_raw_baseline_prompt() -> str:
+    from app.tenant import tenant
+    return tenant.baseline_prompt
 
 # LLM PROMPT INTENT: Efficiency prefix prepended to system prompts when using the Sonnet model,
 #   reducing verbosity and token waste since Sonnet tends toward longer, more elaborate responses.
@@ -465,7 +469,8 @@ def _build_slot_system_prompt(
         if chat_style == "conversational":
             prompt += CONVERSATIONAL_STYLE_SUFFIX
         return prompt, 4096
-    raw = (SONNET_EFFICIENCY_PREFIX + RAW_BASELINE_PROMPT) if is_sonnet else RAW_BASELINE_PROMPT
+    baseline = _get_raw_baseline_prompt()
+    raw = (SONNET_EFFICIENCY_PREFIX + baseline) if is_sonnet else baseline
     if chat_style == "conversational":
         raw += CONVERSATIONAL_STYLE_SUFFIX
     return raw, 4096

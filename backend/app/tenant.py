@@ -125,6 +125,14 @@ class TenantConfig:
         return self._modules["known_apps"].KNOWN_APPS
 
     @property
+    def baseline_prompt(self) -> str:
+        return self._yaml.get("baseline_prompt", "")
+
+    @property
+    def seed_prompts(self) -> list[dict]:
+        return self._yaml.get("seed_prompts", [])
+
+    @property
     def org_yaml_path(self) -> Path:
         return self.tenant_dir / "corvus_org.yaml"
 
