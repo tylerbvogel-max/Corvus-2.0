@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     outcome_loss_penalty: float = 0.3
     outcome_win_cofire_multiplier: int = 2
     outcome_loss_cofire_multiplier: int = 0
+    # Engram / regulatory resolve settings
+    engram_resolve_enabled: bool = True
+    engram_cache_ttl_hours: int = 24
+    engram_max_concurrent_fetches: int = 5
+    engram_token_budget_fraction: float = 0.25
+    engram_fallback_on_api_failure: bool = True
+    engram_haiku_extract_threshold: int = 2000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

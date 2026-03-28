@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.database import engine, async_session
-from app.models import Base, Neuron, SystemState, BatchJob, SourceDocument, NeuronSourceLink, ManagementReview, ComplianceSnapshot, EvidenceMapping, ObservationQueue
+from app.models import Base, Neuron, Engram, SystemState, BatchJob, SourceDocument, NeuronSourceLink, ManagementReview, ComplianceSnapshot, EvidenceMapping, ObservationQueue
 from app.models_corvus import CorvusKnownApp, CorvusSession
-from app.routers import query, neurons, admin, autopilot, performance, provenance, compliance, ingest, corvus, chat_sessions
+from app.routers import query, neurons, admin, autopilot, performance, provenance, compliance, ingest, corvus, chat_sessions, engrams
 from app.compliance.router import router as compliance_suite_router
 from app.compliance.models import ComplianceSuiteRun, ComplianceProviderResult, ComplianceAttestation  # noqa: F401 — for create_all
 from app.seed.loader import load_seed
@@ -516,6 +516,21 @@ async def _auto_embed_neurons():
         logger.warning("Semantic cache invalidation skipped: %s", e)
 
 
+async def _seed_engrams():
+    """Seed engrams from tenant config and auto-embed."""
+    from app.seed.engram_loader import load_engram_seeds, auto_embed_engrams
+
+    async with async_session() as db:
+        result = await load_engram_seeds(db)
+        if result["status"] == "seeded":
+            print(f"Seeded {result['count']} engrams")
+
+    async with async_session() as db:
+        embedded = await auto_embed_engrams(db)
+        if embedded > 0:
+            print(f"Auto-embedded {embedded} engrams")
+
+
 async def _seed_corvus_and_compliance():
     """Seed Corvus apps, initialize Corvus subsystem, seed evidence and compliance."""
     import asyncio
@@ -569,6 +584,7 @@ async def lifespan(app: FastAPI):
     load_compliance_registry()
     await _seed_core_data()
     await _auto_embed_neurons()
+    await _seed_engrams()
     await _seed_corvus_and_compliance()
     yield
 
@@ -630,6 +646,7 @@ app.include_router(compliance.router)
 app.include_router(ingest.router)
 app.include_router(corvus.router)
 app.include_router(chat_sessions.router)
+app.include_router(engrams.router)
 app.include_router(compliance_suite_router)
 
 

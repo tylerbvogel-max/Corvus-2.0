@@ -19,6 +19,7 @@ class NeuronScoreBreakdown:
     relevance: float
     combined: float
     spread_boost: float = 0.0
+    entity_type: str = "neuron"  # "neuron" or "engram"
 
 
 def calc_burst(fires_in_window: int) -> float:

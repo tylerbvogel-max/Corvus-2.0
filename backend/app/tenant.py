@@ -133,6 +133,11 @@ class TenantConfig:
         return self._yaml.get("seed_prompts", [])
 
     @property
+    def engram_seeds(self) -> list:
+        mod = self._modules.get("engram_seeds")
+        return mod.ENGRAM_SEEDS if mod else []
+
+    @property
     def org_yaml_path(self) -> Path:
         return self.tenant_dir / "corvus_org.yaml"
 

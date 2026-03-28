@@ -508,3 +508,77 @@ class ChatSessionMessage(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     session: Mapped["ChatSession"] = relationship("ChatSession", back_populates="messages")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENGRAMS — retrieval indices for external authoritative sources.
+# Engrams participate in neuron scoring but fetch content live from
+# government APIs (eCFR) at query time.  The engram persists; its
+# resolved content is ephemeral.
+# ═══════════════════════════════════════════════════════════════════
+
+
+class Engram(Base):
+    __tablename__ = "engrams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Scoring-compatible fields (shared interface with Neuron)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)  # retrieval cues / key terms, NOT regulation text
+    embedding: Mapped[str | None] = mapped_column(Text, nullable=True)  # 384-dim JSON
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    invocations: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    avg_utility: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")
+    created_at_query_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    # Regulatory source coordinates — maps directly to eCFR API URL structure
+    cfr_title: Mapped[int] = mapped_column(Integer, nullable=False)                        # e.g. 48 (Title 48)
+    cfr_part: Mapped[str] = mapped_column(String(20), nullable=False)                      # e.g. "31"
+    cfr_section: Mapped[str | None] = mapped_column(String(30), nullable=True)             # e.g. "205-14"
+    source_api: Mapped[str] = mapped_column(String(30), default="ecfr", server_default="ecfr")  # ecfr | federal_register
+
+    # Ephemeral cache — resolved text lives here between TTL refreshes
+    cached_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cached_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    cache_ttl_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
+    cached_token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Provenance
+    authority_level: Mapped[str] = mapped_column(String(30), default="regulatory", server_default="regulatory")
+    issuing_body: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    effective_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    last_verified: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    firings: Mapped[list["EngramFiring"]] = relationship("EngramFiring", back_populates="engram", lazy="select")
+
+
+class EngramFiring(Base):
+    __tablename__ = "engram_firings"
+    __table_args__ = (
+        Index("ix_engram_firings_engram_offset", "engram_id", "global_query_offset"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    engram_id: Mapped[int] = mapped_column(Integer, ForeignKey("engrams.id"), nullable=False, index=True)
+    query_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("queries.id"), nullable=True, index=True)
+    global_query_offset: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    engram: Mapped["Engram"] = relationship("Engram", back_populates="firings")
+
+
+class EngramEdge(Base):
+    """Engram-to-neuron co-firing edges. Separate from NeuronEdge to keep adjacency caches clean."""
+    __tablename__ = "engram_edges"
+
+    engram_id: Mapped[int] = mapped_column(Integer, ForeignKey("engrams.id"), primary_key=True)
+    neuron_id: Mapped[int] = mapped_column(Integer, ForeignKey("neurons.id"), primary_key=True)
+    co_fire_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    weight: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+    edge_type: Mapped[str] = mapped_column(String(20), default="regulatory", server_default="regulatory")
+    source: Mapped[str] = mapped_column(String(20), default="bootstrap", server_default="bootstrap")
+    last_updated_query: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    context: Mapped[str | None] = mapped_column(String(300), nullable=True)
