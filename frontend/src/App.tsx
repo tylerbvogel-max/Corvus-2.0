@@ -2,41 +2,27 @@ import { useState, useCallback, useEffect } from 'react'
 import Explorer from './components/Explorer'
 import Dashboard from './components/Dashboard'
 import QueryLab from './components/QueryLab'
-import PipelinePage from './components/PipelinePage'
 import EvaluationPage from './components/EvaluationPage'
 import RefinementHistory from './components/RefinementHistory'
-import NextSteps from './components/NextSteps'
 import AutopilotPage from './components/AutopilotPage'
 import CirclePacking from './components/CirclePacking'
-import AboutPage from './components/AboutPage'
 import SampleQueries from './components/SampleQueries'
-import DeptChordDiagram from './components/DeptChordDiagram'
-import GettingStartedPage from './components/GettingStartedPage'
-
 import QualityPage from './components/QualityPage'
 import FairnessPage from './components/FairnessPage'
 import PerformancePage from './components/PerformancePage'
-import PerformanceExplanationPage from './components/PerformanceExplanationPage'
 import EmergentQueuePage from './components/EmergentQueuePage'
 import SynapticLearningPage from './components/SynapticLearningPage'
 import LayerHeatmap from './components/LayerHeatmap'
-import MethodologicalRisks from './components/MethodologicalRisks'
 import NeuronUniverse from './components/NeuronUniverse'
-import ArchitecturePlanPage from './components/ArchitecturePlanPage'
-import ManagementReviewPage from './components/ManagementReviewPage'
-import CorvusPage from './components/CorvusPage'
-import ObservationReviewPage from './components/ObservationReviewPage'
-import ComplianceDashboard from './components/ComplianceDashboard'
 import KnowledgeGovernancePage from './components/KnowledgeGovernancePage'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
-import SigmaGraphPage from './components/SigmaGraphPage'
-
+import EngramPage from './components/EngramPage'
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'sigma-graph' | 'dashboard' | 'cofiring' | 'layer-heatmap' | 'query' | 'samples' | 'pipeline' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'nextsteps' | 'about' | 'arch-plan' | 'getting-started' | 'compliance-dashboard' | 'quality' | 'fairness' | 'performance' | 'perf-explain' | 'method-risks' | 'mgmt-reviews' | 'corvus-feed' | 'corvus-observations' | 'synaptic-learning' | 'knowledge-governance';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -57,38 +43,25 @@ interface NavItem {
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
-    label: 'Corvus',
-    items: [
-      { key: 'corvus-feed', label: 'Screen Watcher' },
-      { key: 'corvus-observations', label: 'Observations' },
-    ],
-  },
-  {
-    label: 'Query',
+    label: 'Workbench',
     items: [
       { key: 'query', label: 'Query Lab' },
       { key: 'samples', label: 'Samples' },
+      { key: 'autopilot', label: 'Autopilot' },
+      { key: 'refinements', label: 'Refinements' },
+      { key: 'emergent-queue', label: 'Emergent Queue' },
+      { key: 'synaptic-learning', label: 'Synaptic Learning' },
     ],
   },
   {
     label: 'Knowledge',
     items: [
       { key: 'explorer', label: 'Explorer' },
+      { key: 'engrams', label: 'Engrams' },
       { key: 'graph', label: 'Graph' },
       { key: 'universe', label: '3D Universe' },
       { key: 'dashboard', label: 'Dashboard' },
-      { key: 'sigma-graph', label: 'Sigma Graph', labelColor: '#ef4444' },
-      { key: 'cofiring', label: 'Co-Firing' },
       { key: 'layer-heatmap', label: 'Layer Heatmap' },
-    ],
-  },
-  {
-    label: 'Improve',
-    items: [
-      { key: 'autopilot', label: 'Autopilot' },
-      { key: 'refinements', label: 'Refinements' },
-      { key: 'emergent-queue', label: 'Emergent Queue' },
-      { key: 'synaptic-learning', label: 'Synaptic Learning' },
     ],
   },
   {
@@ -99,25 +72,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { key: 'quality', label: 'Quality' },
       { key: 'fairness', label: 'Fairness' },
       { key: 'evaluation', label: 'Evaluation' },
-      { key: 'perf-explain', label: 'Methodology' },
-    ],
-  },
-  {
-    label: 'Compliance',
-    items: [
-      { key: 'compliance-dashboard', label: 'Dashboard' },
-      { key: 'mgmt-reviews', label: 'Reviews' },
-    ],
-  },
-  {
-    label: 'About',
-    items: [
-      { key: 'getting-started', label: 'Getting Started' },
-      { key: 'about', label: 'Overview' },
-      { key: 'arch-plan', label: 'Architecture Plan' },
-      { key: 'pipeline', label: 'Pipeline' },
-      { key: 'method-risks', label: 'Risks' },
-      { key: 'nextsteps', label: 'Next Steps' },
     ],
   },
 ];
@@ -287,44 +241,23 @@ export default function App() {
       )}
       <main className="app-main">
         {tab === 'home' && <HomePage onNavigate={k => setTab(k as Tab)} />}
-        {tab === 'corvus-feed' && <CorvusPage />}
-        {tab === 'corvus-observations' && <ObservationReviewPage />}
         {tab === 'explorer' && <Explorer navigateToNeuronId={explorerNeuronId} onNavigateHandled={() => setExplorerNeuronId(null)} />}
+        {tab === 'engrams' && <EngramPage />}
         {tab === 'graph' && <CirclePacking />}
         {tab === 'universe' && <NeuronUniverse />}
-        {tab === 'sigma-graph' && <SigmaGraphPage />}
         {tab === 'dashboard' && <Dashboard />}
-        {tab === 'cofiring' && (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 16 }}>
-            <h3 style={{ margin: '0 0 8px', color: 'var(--text)' }}>Role Co-Firing Chord Diagram</h3>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <DeptChordDiagram />
-            </div>
-          </div>
-        )}
         {tab === 'layer-heatmap' && <LayerHeatmap />}
         <div style={{ display: tab === 'query' ? 'contents' : 'none' }}><QueryLab onNavigateToNeuron={navigateToNeuron} /></div>
-
-        {tab === 'pipeline' && <PipelinePage />}
         {tab === 'evaluation' && <EvaluationPage />}
         {tab === 'refinements' && <RefinementHistory />}
         {tab === 'samples' && <SampleQueries />}
         {tab === 'autopilot' && <AutopilotPage />}
         {tab === 'emergent-queue' && <EmergentQueuePage />}
         {tab === 'synaptic-learning' && <SynapticLearningPage />}
-        {tab === 'nextsteps' && <NextSteps />}
-        {tab === 'getting-started' && <GettingStartedPage />}
-        {tab === 'about' && <AboutPage />}
-        {tab === 'arch-plan' && <ArchitecturePlanPage />}
-        {tab === 'compliance-dashboard' && <ComplianceDashboard />}
-
-        {tab === 'mgmt-reviews' && <ManagementReviewPage />}
         {tab === 'quality' && <QualityPage />}
         {tab === 'fairness' && <FairnessPage />}
         {tab === 'performance' && <PerformancePage />}
-        {tab === 'perf-explain' && <PerformanceExplanationPage />}
         {tab === 'knowledge-governance' && <KnowledgeGovernancePage />}
-        {tab === 'method-risks' && <MethodologicalRisks />}
       </main>
     </div>
   )
