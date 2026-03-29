@@ -67,6 +67,7 @@ interface TreeNodeData {
   spread_boost: number;
   isPrompt?: boolean;
   isBridge?: boolean;
+  isEngram?: boolean;
   summary?: string | null;
   burst?: number;
   impact?: number;
@@ -98,10 +99,13 @@ function buildHierarchyTree(
     });
   }
   for (const n of scores) {
+    const isEngram = n.entity_type === 'engram';
     nodeMap.set(n.neuron_id, {
-      key: `n-${n.neuron_id}`, neuron_id: n.neuron_id, label: n.label || `#${n.neuron_id}`,
-      department: n.department ?? 'Unknown', layer: n.layer,
+      key: `${isEngram ? 'e' : 'n'}-${n.neuron_id}`, neuron_id: n.neuron_id,
+      label: n.label || `#${n.neuron_id}`,
+      department: n.department ?? (isEngram ? 'Engram' : 'Unknown'), layer: n.layer,
       combined: n.combined, spread_boost: n.spread_boost,
+      isEngram,
       summary: n.summary, burst: n.burst, impact: n.impact,
       precision: n.precision, novelty: n.novelty, recency: n.recency,
       relevance: n.relevance, children: [],
@@ -342,6 +346,8 @@ export default function NeuronTreeViz({ neuronScores, queryId, onNavigateToNeuro
     const neuronIdSet = new Set(neuronScores.map(n => n.neuron_id));
     const missingParents = new Set<number>();
     for (const n of neuronScores) {
+      // Engrams have no parent — skip ancestor fetching for them
+      if (n.entity_type === 'engram') continue;
       if (n.parent_id != null && !neuronIdSet.has(n.parent_id)) missingParents.add(n.parent_id);
     }
     if (missingParents.size === 0) { setAncestorData(new Map()); return; }
@@ -650,18 +656,36 @@ export default function NeuronTreeViz({ neuronScores, queryId, onNavigateToNeuro
           if (d.neuron_id != null && onNavigateToNeuron) onNavigateToNeuron(d.neuron_id);
         });
 
-      ng.append('circle').attr('r', r + 4).attr('fill', color)
-        .attr('fill-opacity', 0.08).attr('filter', 'url(#node-glow2)');
+      if (d.isEngram) {
+        // Engram: diamond shape (rotated square)
+        const s = r * 1.3;
+        ng.append('rect').attr('x', -s - 3).attr('y', -s - 3).attr('width', (s + 3) * 2).attr('height', (s + 3) * 2)
+          .attr('fill', color).attr('fill-opacity', 0.08).attr('filter', 'url(#node-glow2)')
+          .attr('transform', 'rotate(45)');
+        if (d.spread_boost > 0) {
+          ng.append('rect').attr('x', -s - 1).attr('y', -s - 1).attr('width', (s + 1) * 2).attr('height', (s + 1) * 2)
+            .attr('fill', 'none').attr('stroke', SPREAD_RING_COLOR).attr('stroke-width', 1.5).attr('stroke-opacity', 0.7)
+            .attr('transform', 'rotate(45)');
+        }
+        ng.append('rect').attr('x', -s).attr('y', -s).attr('width', s * 2).attr('height', s * 2)
+          .attr('fill', color).attr('fill-opacity', nodeOpacity)
+          .attr('stroke', color).attr('stroke-width', 0.5).attr('stroke-opacity', 0.5)
+          .attr('transform', 'rotate(45)');
+      } else {
+        // Neuron: circle shape
+        ng.append('circle').attr('r', r + 4).attr('fill', color)
+          .attr('fill-opacity', 0.08).attr('filter', 'url(#node-glow2)');
 
-      if (d.spread_boost > 0) {
-        ng.append('circle').attr('r', r + 2).attr('fill', 'none')
-          .attr('stroke', SPREAD_RING_COLOR).attr('stroke-width', 1.5).attr('stroke-opacity', 0.7);
+        if (d.spread_boost > 0) {
+          ng.append('circle').attr('r', r + 2).attr('fill', 'none')
+            .attr('stroke', SPREAD_RING_COLOR).attr('stroke-width', 1.5).attr('stroke-opacity', 0.7);
+        }
+
+        ng.append('circle').attr('r', r).attr('fill', color)
+          .attr('fill-opacity', nodeOpacity)
+          .attr('stroke', isPrompt ? '#fff' : color)
+          .attr('stroke-width', isPrompt ? 2 : 0.5).attr('stroke-opacity', 0.5);
       }
-
-      ng.append('circle').attr('r', r).attr('fill', color)
-        .attr('fill-opacity', nodeOpacity)
-        .attr('stroke', isPrompt ? '#fff' : color)
-        .attr('stroke-width', isPrompt ? 2 : 0.5).attr('stroke-opacity', 0.5);
 
       if (!d.isBridge && (isPrompt || scoreT > 0.15)) {
         const labelText = d.label.length > 16 ? d.label.slice(0, 15) + '…' : d.label;
@@ -926,9 +950,12 @@ export default function NeuronTreeViz({ neuronScores, queryId, onNavigateToNeuro
               display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap',
             }}>
               <div style={{ minWidth: 160 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 2 }}>{hoverNode.label}</div>
+                <div style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: 2 }}>
+                  {hoverNode.isEngram && <span style={{ color: '#f59e0b', marginRight: 6, fontSize: '0.72rem' }}>ENGRAM</span>}
+                  {hoverNode.label}
+                </div>
                 <div style={{ color: deptColor(hoverNode.department), fontSize: '0.72rem' }}>
-                  {shortDept(hoverNode.department)} &middot; {LAYER_LABELS[hoverNode.layer] ?? `L${hoverNode.layer}`}
+                  {hoverNode.isEngram ? 'Regulatory Source' : shortDept(hoverNode.department)} &middot; {hoverNode.isEngram ? 'eCFR' : (LAYER_LABELS[hoverNode.layer] ?? `L${hoverNode.layer}`)}
                 </div>
                 {hoverNode.summary && (
                   <div style={{ color: '#94a3b8', fontSize: '0.7rem', marginTop: 4, maxWidth: 300 }}>{hoverNode.summary}</div>

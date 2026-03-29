@@ -90,6 +90,7 @@ export interface NeuronScoreResponse {
   recency: number;
   relevance: number;
   spread_boost: number;
+  entity_type?: 'neuron' | 'engram';
   label: string | null;
   department: string | null;
   layer: number;

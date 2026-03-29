@@ -136,28 +136,61 @@ _cache = _AdjacencyCache()
 
 
 async def ensure_adjacency_loaded(db) -> None:
-    """Load the adjacency cache from DB if not already loaded."""
+    """Load the adjacency cache from DB if not already loaded (neurons + engrams).
+
+    Engram IDs are stored as negative values to avoid collision with neuron IDs
+    in the shared adjacency dict.  Callers use engram_id_to_key() / key_to_engram_id()
+    to convert.
+    """
     if _cache.is_loaded:
         return
 
     from sqlalchemy import text
+
+    # Load neuron-neuron edges
     result = await db.execute(
         text("SELECT source_id, target_id, weight, edge_type FROM neuron_edges")
     )
-    rows = result.all()
-
     edges = [
         (int(src), int(tgt), float(w), etype or "pyramidal")
-        for src, tgt, w, etype in rows
+        for src, tgt, w, etype in result.all()
     ]
+    neuron_edge_count = len(edges)
+
+    # Load engram-neuron edges (engram IDs negated to avoid collision)
+    try:
+        engram_result = await db.execute(
+            text("SELECT engram_id, neuron_id, weight, edge_type FROM engram_edges")
+        )
+        for eid, nid, w, etype in engram_result.all():
+            edges.append((-int(eid), int(nid), float(w), etype or "regulatory"))
+    except Exception:
+        pass  # engram_edges table may not exist yet
+
+    engram_edge_count = len(edges) - neuron_edge_count
 
     if edges:
         _cache.load(edges)
-        total_neurons = len(_cache._adjacency)
-        print(f"Adjacency cache loaded: {len(edges)} edges, {total_neurons} neurons in graph")
+        total_nodes = len(_cache._adjacency)
+        print(f"Adjacency cache loaded: {neuron_edge_count} neuron + {engram_edge_count} engram edges, {total_nodes} nodes in graph")
     else:
         _cache.load([])
         print("Adjacency cache: no edges found")
+
+
+def engram_id_to_key(engram_id: int) -> int:
+    """Convert an engram ID to its adjacency cache key (negative)."""
+    return -engram_id
+
+
+def key_to_engram_id(key: int) -> int:
+    """Convert a negative adjacency key back to an engram ID."""
+    return -key
+
+
+def is_engram_key(key: int) -> bool:
+    """Check if an adjacency cache key represents an engram (negative)."""
+    return key < 0
 
 
 def invalidate_adjacency_cache() -> None:

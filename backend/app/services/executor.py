@@ -389,6 +389,7 @@ def _build_neuron_score_dicts(
         {"neuron_id": s.neuron_id, "combined": s.combined, "burst": s.burst,
          "impact": s.impact, "precision": s.precision, "novelty": s.novelty,
          "recency": s.recency, "relevance": s.relevance, "spread_boost": s.spread_boost,
+         "entity_type": getattr(s, "entity_type", "neuron"),
          "label": neuron_map[s.neuron_id].label if s.neuron_id in neuron_map else None,
          "department": neuron_map[s.neuron_id].department if s.neuron_id in neuron_map else None,
          "layer": neuron_map[s.neuron_id].layer if s.neuron_id in neuron_map else 0,
