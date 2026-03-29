@@ -134,7 +134,9 @@ async def score_engram_candidates(
     # Build arrays for vectorized scoring
     burst_arr = np.array([burst_map.get(c.id, 0) for c in candidates], dtype=np.float64)
     impact_arr = np.array([c.avg_utility for c in candidates], dtype=np.float64)
-    precision_arr = np.full(n, 0.3, dtype=np.float64)  # no dept stats for engrams
+    # Engrams have no dept stats — use zeros to trigger the <5 queries floor (0.3)
+    precision_fires = np.zeros(n, dtype=np.float64)
+    precision_totals = np.zeros(n, dtype=np.float64)
     age_arr = np.array([max(0, total_queries - c.created_at_query_count) for c in candidates], dtype=np.float64)
     last_fire_arr = np.array([
         max(0, total_queries - fire_map.get(c.id, (0, 0))[1])
@@ -144,7 +146,7 @@ async def score_engram_candidates(
     # Compute signals
     bursts = calc_burst_batch(burst_arr)
     impacts = calc_impact_batch(impact_arr)
-    precisions = calc_precision_batch(precision_arr)
+    precisions = calc_precision_batch(precision_fires, precision_totals)
     novelties = calc_novelty_batch(age_arr)
     recencies = calc_recency_batch(last_fire_arr)
 
