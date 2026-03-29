@@ -88,25 +88,44 @@ async def _select_and_score_candidates(
     departments: list[str],
     role_keys: list[str],
     total_queries: int,
-) -> list[NeuronScoreBreakdown]:
+) -> tuple[list[NeuronScoreBreakdown], list[NeuronScoreBreakdown]]:
+    """Score neuron and engram candidates.  Returns (scored_neurons, scored_engrams)."""
     assert isinstance(effective_pool, int) and effective_pool > 0, \
         "effective_pool must be a positive integer"
 
-    semantic_candidates: list[tuple[int, float]] | None = None
+    scored_engrams: list[NeuronScoreBreakdown] = []
+    semantic_results: list[tuple[int, str, float]] | None = None
+
     if settings.semantic_prefilter_enabled and query_embedding is not None:
         from app.services.semantic_prefilter import semantic_prefilter
-        semantic_candidates = await semantic_prefilter(db, query_embedding, top_n_override=effective_pool)
+        semantic_results = await semantic_prefilter(db, query_embedding, top_n_override=effective_pool)
 
-    if semantic_candidates:
-        sem_ids = [nid for nid, _ in semantic_candidates]
-        sem_sim_map = {nid: sim for nid, sim in semantic_candidates}
-        candidates = await _load_candidates_by_ids(db, sem_ids, keywords)
+    if semantic_results:
+        # Partition into neurons and engrams
+        neuron_sims = {eid: sim for eid, etype, sim in semantic_results if etype == "neuron"}
+        engram_sims = {eid: sim for eid, etype, sim in semantic_results if etype == "engram"}
+
+        # Score neurons
+        sem_ids = list(neuron_sims.keys())
+        candidates = await _load_candidates_by_ids(db, sem_ids, keywords) if sem_ids else []
         scored = await score_candidates(
             db, candidates, total_queries, keywords,
             departments, role_keys,
             query_embedding=query_embedding,
-            precomputed_similarities=sem_sim_map,
+            precomputed_similarities=neuron_sims,
         )
+
+        # Score engrams if any matched
+        if engram_sims and settings.engram_resolve_enabled:
+            from app.services.engram_service import get_engram_candidates, score_engram_candidates
+            engram_cands = await get_engram_candidates(db, keywords)
+            # Filter to only engrams that appeared in semantic results
+            engram_cands = [c for c in engram_cands if c.id in engram_sims]
+            if engram_cands:
+                scored_engrams = await score_engram_candidates(
+                    db, engram_cands, total_queries, keywords,
+                    precomputed_similarities=engram_sims,
+                )
     else:
         candidates = await get_neurons_by_filter(db, departments, role_keys, keywords)
         if not candidates:
@@ -117,7 +136,7 @@ async def _select_and_score_candidates(
         )
 
     assert isinstance(scored, list), "scored must be a list"
-    return scored
+    return scored, scored_engrams
 
 
 async def _apply_inhibition_and_boost(
@@ -178,16 +197,38 @@ def _build_neuron_score_dicts(
     ]
 
 
+async def _resolve_fired_engrams(db, scored_engrams, effective_budget, _emit):
+    """Fetch live regulatory text for fired engrams via eCFR API."""
+    if not scored_engrams or not settings.engram_resolve_enabled:
+        return []
+    from app.services.regulatory_resolve import resolve_engrams
+    from app.models import Engram
+    engram_ids = [s.neuron_id for s in scored_engrams[:10]]
+    engram_rows = (await db.execute(
+        select(Engram).where(Engram.id.in_(engram_ids))
+    )).scalars().all()
+    engram_map = {e.id: e for e in engram_rows}
+    fired_pairs = [
+        (engram_map[s.neuron_id], s.combined)
+        for s in scored_engrams[:10] if s.neuron_id in engram_map
+    ]
+    engram_budget = int(effective_budget * settings.engram_token_budget_fraction)
+    resolved = await resolve_engrams(db, fired_pairs, engram_budget)
+    await _emit("regulatory_resolve", {"status": "done", "detail": {
+        "resolved": len(resolved),
+        "cached": sum(1 for r in resolved if r.source == "cache"),
+        "live": sum(1 for r in resolved if r.source == "live_api"),
+        "fallback": sum(1 for r in resolved if r.source == "fallback_summary"),
+    }})
+    return resolved
+
+
 async def prepare_context(
     db: AsyncSession, user_message: str, token_budget: int | None = None,
-    top_k: int | None = None,
-    project_path: str | None = None, on_stage: StageCallback = None,
-    prior_neuron_ids: list[int] | None = None,
+    top_k: int | None = None, project_path: str | None = None,
+    on_stage: StageCallback = None, prior_neuron_ids: list[int] | None = None,
 ) -> PreparedContext:
-    """Run classify → score → spread → inhibit → assemble without LLM execution.
-
-    This is the core neuron graph pipeline extracted for reuse by MCP and the REST API.
-    """
+    """Run classify → score → spread → inhibit → resolve → assemble pipeline."""
     assert isinstance(user_message, str) and len(user_message.strip()) > 0, \
         "user_message must be a non-empty string"
     async def _emit(stage: str, data: dict | None = None):
@@ -215,15 +256,13 @@ async def prepare_context(
     await _emit("classify", {"status": "done", "detail": {"intent": intent, "departments": departments}})
 
     state = await get_system_state(db)
-    scored = await _select_and_score_candidates(
+    scored, scored_engrams = await _select_and_score_candidates(
         db, query_embedding, effective_pool, keywords, departments, role_keys, state.total_queries,
     )
-    await _emit("semantic_prefilter", {"status": "done", "detail": {"candidates": len(scored)}})
+    await _emit("semantic_prefilter", {"status": "done", "detail": {"candidates": len(scored), "engram_candidates": len(scored_engrams)}})
     await _emit("score_neurons", {"status": "done", "detail": {"scored": len(scored)}})
 
-    # Continuity boost: neurons from prior conversation turns get a 1.3× lift.
-    # This makes the graph "remember" what the user was asking about, keeping
-    # related neurons near the top across a multi-turn conversation.
+    # Continuity boost: neurons from prior conversation turns get a 1.3x lift.
     if prior_neuron_ids:
         prior_set = set(prior_neuron_ids)
         for s in scored:
@@ -236,6 +275,9 @@ async def prepare_context(
     all_scored, effective_top_k = await _apply_inhibition_and_boost(
         db, scored, effective_top_k, project_path,
     )
+
+    resolved_regulations = await _resolve_fired_engrams(db, scored_engrams, effective_budget, _emit)
+
     if settings.hierarchy_selection_enabled:
         top_slice = await select_with_hierarchy(db, all_scored, effective_top_k)
     else:
@@ -245,7 +287,6 @@ async def prepare_context(
     # Load prior neuron context for conversation continuity in prompt assembly
     prior_neuron_map: dict[int, Neuron] | None = None
     if prior_neuron_ids:
-        # Only load neurons not already in neuron_map
         missing_ids = [nid for nid in prior_neuron_ids if nid not in neuron_map]
         if missing_ids:
             extra = await _load_neuron_map(db, missing_ids)
@@ -256,8 +297,9 @@ async def prepare_context(
     system_prompt = assemble_prompt(
         intent, top_slice, neuron_map, budget_tokens=effective_budget,
         prior_neuron_ids=prior_neuron_ids, prior_neuron_map=prior_neuron_map,
+        resolved_regulations=resolved_regulations,
     )
-    await _emit("assemble_prompt", {"status": "done", "detail": {"neurons_activated": min(len(all_scored), effective_top_k)}})
+    await _emit("assemble_prompt", {"status": "done", "detail": {"neurons_activated": min(len(all_scored), effective_top_k), "engrams_resolved": len(resolved_regulations)}})
 
     if project_path and getattr(settings, 'project_cache_enabled', False):
         from app.services.project_cache import record_project_firings

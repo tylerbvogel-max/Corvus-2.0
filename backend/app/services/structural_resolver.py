@@ -239,9 +239,9 @@ async def _handle_topic_search(db: AsyncSession, match: re.Match):
     if not candidates:
         return None
 
-    # Load neuron details
-    cand_ids = [nid for nid, _ in candidates]
-    sim_map = {nid: sim for nid, sim in candidates}
+    # Load neuron details (filter to neurons only — engrams handled in full pipeline)
+    cand_ids = [eid for eid, etype, _ in candidates if etype == "neuron"]
+    sim_map = {eid: sim for eid, etype, sim in candidates if etype == "neuron"}
     result = await db.execute(select(Neuron).where(Neuron.id.in_(cand_ids)))
     neurons = {n.id: n for n in result.scalars().all()}
 

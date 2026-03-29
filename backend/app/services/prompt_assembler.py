@@ -176,6 +176,32 @@ def _pack_regulatory_section(
     return used_tokens
 
 
+def _pack_resolved_regulations(
+    parts: list[str],
+    resolved: list,
+    used_tokens: int,
+    budget: int,
+) -> int:
+    """Pack resolved engram regulatory text into the prompt."""
+    if not resolved:
+        return used_tokens
+    header = "\n## Authoritative Regulatory Text (live from eCFR)"
+    header_tokens = _estimate_tokens(header)
+    if used_tokens + header_tokens > budget:
+        return used_tokens
+    parts.append(header)
+    used_tokens += header_tokens
+
+    for reg in sorted(resolved, key=lambda r: r.token_count):
+        entry = f"**{reg.cfr_ref}** [REGULATORY]\n{reg.text}"
+        entry_tokens = _estimate_tokens(entry)
+        if used_tokens + entry_tokens > budget:
+            break
+        parts.append(entry)
+        used_tokens += entry_tokens
+    return used_tokens
+
+
 def assemble_prompt(
     intent: str,
     scored_neurons: list[NeuronScoreBreakdown],
@@ -183,8 +209,9 @@ def assemble_prompt(
     budget_tokens: int | None = None,
     prior_neuron_ids: list[int] | None = None,
     prior_neuron_map: dict[int, Neuron] | None = None,
+    resolved_regulations: list | None = None,
 ) -> str:
-    """Pack top-K neurons into a system prompt within token budget.
+    """Pack top-K neurons + resolved regulatory text into a system prompt within token budget.
 
     Groups by department > role for structural coherence.
     Falls back to summary-only if full content exceeds budget.
@@ -202,6 +229,10 @@ def assemble_prompt(
     functional, regulatory = _partition_neurons(scored_neurons, neuron_map)
     used_tokens = _pack_functional_section(parts, functional, used_tokens, budget)
     used_tokens = _pack_regulatory_section(parts, regulatory, used_tokens, budget)
+
+    # Pack live regulatory text from resolved engrams
+    if resolved_regulations:
+        used_tokens = _pack_resolved_regulations(parts, resolved_regulations, used_tokens, budget)
 
     parts.append("")
     parts.append("Use the above knowledge to directly answer the user's question. Provide specific, actionable guidance with concrete examples and code where applicable.")
