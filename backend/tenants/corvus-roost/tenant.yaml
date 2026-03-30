@@ -9,7 +9,7 @@ system_use_banner: >-
   or legal counsel. Financial projections are estimates, not guarantees.
 semantic_prefilter_enabled: true
 regulatory_department_name: "Legal & Regulatory Compliance"
-reseed_threshold: 40
+reseed_threshold: 80
 baseline_prompt: "I am a property manager at a commercial real estate firm managing office and residential properties across New York, Connecticut, and Arizona."
 seed_prompts:
   - label: "Tenant risk assessment"

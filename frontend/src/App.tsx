@@ -21,6 +21,7 @@ import EngramPage from './components/EngramPage'
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
+import { checkAccess, setAccessKey, getAccessKey } from './auth'
 
 type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams';
 
@@ -95,12 +96,26 @@ export default function App() {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
   const [allTenants, setAllTenants] = useState<TenantSummary[]>([]);
+  const [authStatus, setAuthStatus] = useState<'checking' | 'open' | 'valid' | 'needs_key'>('checking');
+  const [keyInput, setKeyInput] = useState('');
+  const [keyError, setKeyError] = useState(false);
 
-  // Fetch tenant config + all tenants on mount
+  // Check auth on mount
   useEffect(() => {
-    fetchTenantConfig().then(setTenantConfig);
-    fetchAllTenants().then(setAllTenants);
+    checkAccess().then(status => {
+      if (status === 'invalid' && !getAccessKey()) setAuthStatus('needs_key');
+      else if (status === 'invalid') setAuthStatus('needs_key');
+      else setAuthStatus(status);
+    });
   }, []);
+
+  // Fetch tenant config + all tenants once authed
+  useEffect(() => {
+    if (authStatus === 'open' || authStatus === 'valid') {
+      fetchTenantConfig().then(setTenantConfig);
+      fetchAllTenants().then(setAllTenants);
+    }
+  }, [authStatus]);
 
   const displayName = tenantConfig?.display_name ?? 'Corvus';
   const otherTenants = allTenants.filter(t => t.tenant_id !== tenantConfig?.tenant_id);
@@ -132,6 +147,54 @@ export default function App() {
 
   // Find which group the active tab belongs to
   const activeGroup = NAV_GROUPS.find(g => g.items.some(i => i.key === tab))?.label;
+
+  // Auth gate
+  if (authStatus === 'checking') {
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--text-dim)' }}>Loading...</div>;
+  }
+
+  if (authStatus === 'needs_key') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg)' }}>
+        <div style={{ textAlign: 'center', maxWidth: 360 }}>
+          <img src="/corvus-logo.png" alt="Corvus" style={{ width: 64, height: 64, marginBottom: 16, opacity: 0.8 }} />
+          <h2 style={{ color: 'var(--text)', fontSize: 18, margin: '0 0 8px' }}>Corvus Access</h2>
+          <p style={{ color: 'var(--text-dim)', fontSize: 13, margin: '0 0 20px' }}>Enter your access key to continue.</p>
+          <form onSubmit={e => {
+            e.preventDefault();
+            setAccessKey(keyInput);
+            setKeyError(false);
+            checkAccess().then(status => {
+              if (status === 'valid' || status === 'open') setAuthStatus(status);
+              else { setKeyError(true); setKeyInput(''); }
+            });
+          }}>
+            <input
+              type="password"
+              value={keyInput}
+              onChange={e => setKeyInput(e.target.value)}
+              placeholder="Access key"
+              autoFocus
+              style={{
+                width: '100%', padding: '10px 14px', fontSize: 14,
+                background: 'var(--bg-input)', border: `1px solid ${keyError ? '#ef4444' : 'var(--border)'}`,
+                borderRadius: 8, color: 'var(--text)', outline: 'none',
+                marginBottom: 12, fontFamily: 'monospace',
+              }}
+            />
+            {keyError && <p style={{ color: '#ef4444', fontSize: 12, margin: '0 0 12px' }}>Invalid access key</p>}
+            <button type="submit" style={{
+              width: '100%', padding: '10px', fontSize: 14, fontWeight: 600,
+              background: 'var(--accent, #c87533)', color: '#fff', border: 'none',
+              borderRadius: 8, cursor: 'pointer',
+            }}>
+              Enter
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app app-sidebar-layout">

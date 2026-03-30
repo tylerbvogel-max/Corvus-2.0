@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.middleware.audit import AuditMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.access_gate import AccessGateMiddleware
 from sqlalchemy import select, func, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -613,6 +614,9 @@ app.add_middleware(
 # Security headers middleware — defense-in-depth headers on all responses
 # Addresses: NIST 800-53 AC-12/SC-10/SC-28, CMMC 3.1.11/3.13.9, SOC 2 CC6.1
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Access gate middleware — shared key authentication when CORVUS_ACCESS_KEY is set
+app.add_middleware(AccessGateMiddleware)
 
 # Audit logging middleware — logs all POST/PUT/DELETE/PATCH to audit_log table
 # Addresses: NIST 800-53 AU-2/AU-3/AU-12, CMMC 3.3.1, SOC 2 CC7.2

@@ -64,6 +64,23 @@ def seed_regulatory(force: bool = False):
 
     if existing > 0 and force:
         print(f"Force re-seed: deleting {existing} existing Regulatory neurons")
+        # Clean all FK references before deleting neurons
+        for fk_table, fk_col in (
+            ("neuron_edges", "source_id"),
+            ("neuron_edges", "target_id"),
+            ("neuron_firings", "neuron_id"),
+            ("neuron_refinements", "neuron_id"),
+            ("neuron_source_links", "neuron_id"),
+            ("propagation_log", "source_neuron_id"),
+            ("propagation_log", "target_neuron_id"),
+            ("synaptic_learning_events", "neuron_id"),
+            ("engram_edges", "neuron_id"),
+        ):
+            cursor.execute(
+                f"DELETE FROM {fk_table} WHERE {fk_col} IN "
+                f"(SELECT id FROM neurons WHERE department = %s)",
+                (DEPARTMENT,),
+            )
         cursor.execute("DELETE FROM neurons WHERE department = %s", (DEPARTMENT,))
 
     created = 0

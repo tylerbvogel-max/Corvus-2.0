@@ -27,7 +27,13 @@ import type {
 } from './types';
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const { getAuthHeaders } = await import('./auth');
+  const authHeaders = getAuthHeaders();
+  const mergedInit: RequestInit = {
+    ...init,
+    headers: { ...authHeaders, ...(init?.headers || {}) },
+  };
+  const res = await fetch(url, mergedInit);
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
