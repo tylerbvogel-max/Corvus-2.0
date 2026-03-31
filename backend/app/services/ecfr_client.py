@@ -58,7 +58,7 @@ class ECFRClient:
         assert part, "part must be a non-empty string"
 
         if date is None:
-            date = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
+            date = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
 
         params: dict[str, str] = {"part": part}
         if section:
