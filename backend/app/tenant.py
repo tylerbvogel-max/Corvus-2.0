@@ -138,6 +138,14 @@ class TenantConfig:
         return mod.ENGRAM_SEEDS if mod else []
 
     @property
+    def agent_role_personas(self) -> dict[str, str]:
+        """Return tenant-specific agent role personas for agentic orchestration."""
+        mod = self._modules.get("agent_roles")
+        if mod and hasattr(mod, "AGENT_ROLE_PERSONAS"):
+            return dict(mod.AGENT_ROLE_PERSONAS)
+        return {}
+
+    @property
     def org_yaml_path(self) -> Path:
         return self.tenant_dir / "corvus_org.yaml"
 

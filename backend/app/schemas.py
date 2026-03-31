@@ -71,6 +71,39 @@ class OutputCheckOut(BaseModel):
     grounding: GroundingOut | None = None
 
 
+class AgentResultOut(BaseModel):
+    """Result from a single domain agent."""
+    domain_key: str
+    department: str
+    role_key: str
+    role: str
+    findings: str
+    citations: list[str] = []
+    confidence: float
+    flags: list[str] = []
+    neuron_ids: list[int] = []
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0
+    duration_ms: int = 0
+    error: bool = False
+    error_message: str = ""
+
+
+class AgentExecutionOut(BaseModel):
+    """Result from full agent dispatch and coordination."""
+    agent_results: list[AgentResultOut] = []
+    synthesis: str
+    coordinator_model: str
+    escalated_to_opus: bool = False
+    domains_active: list[str] = []
+    coordinator_input_tokens: int = 0
+    coordinator_output_tokens: int = 0
+    coordinator_cost_usd: float = 0
+    total_agents_dispatched: int = 0
+    total_cost_usd: float = 0
+
+
 class QueryResponse(BaseModel):
     query_id: int
     intent: str | None = None
@@ -86,6 +119,7 @@ class QueryResponse(BaseModel):
     total_cost: float = 0
     input_guard: InputGuardOut | None = None
     output_checks: list[OutputCheckOut] = []
+    agent_execution: AgentExecutionOut | None = None
 
 
 class EvalRequest(BaseModel):

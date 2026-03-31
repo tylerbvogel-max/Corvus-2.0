@@ -18,12 +18,14 @@ import KnowledgeGovernancePage from './components/KnowledgeGovernancePage'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import EngramPage from './components/EngramPage'
+import CorvusPage from './components/CorvusPage'
+import ObservationReviewPage from './components/ObservationReviewPage'
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 import { checkAccess, setAccessKey, getAccessKey } from './auth'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -42,40 +44,57 @@ interface NavItem {
   labelColor?: string;
 }
 
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  {
-    label: 'Workbench',
-    items: [
-      { key: 'query', label: 'Query Lab' },
-      { key: 'samples', label: 'Samples' },
-      { key: 'autopilot', label: 'Autopilot' },
-      { key: 'refinements', label: 'Refinements' },
-      { key: 'emergent-queue', label: 'Emergent Queue' },
-      { key: 'synaptic-learning', label: 'Synaptic Learning' },
-    ],
-  },
-  {
-    label: 'Knowledge',
-    items: [
-      { key: 'explorer', label: 'Explorer' },
-      { key: 'engrams', label: 'Engrams' },
-      { key: 'graph', label: 'Graph' },
-      { key: 'universe', label: '3D Universe' },
-      { key: 'dashboard', label: 'Dashboard' },
-      { key: 'layer-heatmap', label: 'Layer Heatmap' },
-    ],
-  },
-  {
-    label: 'Evaluate',
-    items: [
-      { key: 'knowledge-governance', label: 'Governance' },
-      { key: 'performance', label: 'Performance' },
-      { key: 'quality', label: 'Quality' },
-      { key: 'fairness', label: 'Fairness' },
-      { key: 'evaluation', label: 'Evaluation' },
-    ],
-  },
-];
+function buildNavGroups(tenantId: string | undefined): { label: string; items: NavItem[] }[] {
+  const groups: { label: string; items: NavItem[] }[] = [];
+
+  // Screen Watcher — only for tenants with screen capture enabled
+  if (tenantId === 'corvus-apex') {
+    groups.push({
+      label: 'Corvus',
+      items: [
+        { key: 'corvus-feed', label: 'Screen Watcher' },
+        { key: 'corvus-observations', label: 'Observations' },
+      ],
+    });
+  }
+
+  groups.push(
+    {
+      label: 'Workbench',
+      items: [
+        { key: 'query', label: 'Query Lab' },
+        { key: 'samples', label: 'Samples' },
+        { key: 'autopilot', label: 'Autopilot' },
+        { key: 'refinements', label: 'Refinements' },
+        { key: 'emergent-queue', label: 'Emergent Queue' },
+        { key: 'synaptic-learning', label: 'Synaptic Learning' },
+      ],
+    },
+    {
+      label: 'Knowledge',
+      items: [
+        { key: 'explorer', label: 'Explorer' },
+        { key: 'engrams', label: 'Engrams' },
+        { key: 'graph', label: 'Graph' },
+        { key: 'universe', label: '3D Universe' },
+        { key: 'dashboard', label: 'Dashboard' },
+        { key: 'layer-heatmap', label: 'Layer Heatmap' },
+      ],
+    },
+    {
+      label: 'Evaluate',
+      items: [
+        { key: 'knowledge-governance', label: 'Governance' },
+        { key: 'performance', label: 'Performance' },
+        { key: 'quality', label: 'Quality' },
+        { key: 'fairness', label: 'Fairness' },
+        { key: 'evaluation', label: 'Evaluation' },
+      ],
+    },
+  );
+
+  return groups;
+}
 
 function getInitialTheme(): Theme {
   const saved = localStorage.getItem('corvus-theme');
@@ -145,8 +164,9 @@ export default function App() {
     });
   }, []);
 
-  // Find which group the active tab belongs to
-  const activeGroup = NAV_GROUPS.find(g => g.items.some(i => i.key === tab))?.label;
+  // Build nav groups based on tenant (screen watcher only for apex)
+  const navGroups = buildNavGroups(tenantConfig?.tenant_id);
+  const activeGroup = navGroups.find(g => g.items.some(i => i.key === tab))?.label;
 
   // Auth gate
   if (authStatus === 'checking') {
@@ -227,7 +247,7 @@ export default function App() {
         )}
         {!collapsed && (
           <nav className="sidebar-nav">
-            {NAV_GROUPS.map(group => (
+            {navGroups.map(group => (
               <div key={group.label} className={`sidebar-group${activeGroup === group.label ? ' sidebar-group-active' : ''}`}>
                 <button
                   className="sidebar-group-header"
@@ -304,6 +324,8 @@ export default function App() {
       )}
       <main className="app-main">
         {tab === 'home' && <HomePage onNavigate={k => setTab(k as Tab)} />}
+        {tab === 'corvus-feed' && <CorvusPage />}
+        {tab === 'corvus-observations' && <ObservationReviewPage />}
         {tab === 'explorer' && <Explorer navigateToNeuronId={explorerNeuronId} onNavigateHandled={() => setExplorerNeuronId(null)} />}
         {tab === 'engrams' && <EngramPage />}
         {tab === 'graph' && <CirclePacking />}

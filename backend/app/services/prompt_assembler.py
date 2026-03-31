@@ -22,6 +22,26 @@ AUTHORITY_TAG_MAP = MappingProxyType({
     "informational": "INFO",
 })
 
+# Intent-specific closing instructions to guide Haiku output structure
+CLOSING_INSTRUCTION_MAP = MappingProxyType({
+    "compliance": "Answer with: (1) Direct answer, (2) Cited regulation clause numbers (FAR/DFARS/CAS/ITAR), (3) [RISK] flags if any compliance exposure, (4) Recommended action. Never fabricate regulation numbers — if uncertain, say so explicitly.",
+    "engineering": "Answer with: (1) Technical recommendation, (2) Referenced standard with section number (MIL-STD, DO-178C, AS9100, ASME Y14.5, SAE), (3) Implementation steps (numbered, specific), (4) Verification method or acceptance criteria.",
+    "data_engineer": "Answer with: (1) Recommended approach with specific tools, (2) Code example if applicable, (3) When to use this vs alternatives (tradeoffs), (4) Common pitfalls or failure modes.",
+    "elt": "Answer with: (1) Recommended approach with specific tools, (2) Code example if applicable, (3) When to use this vs alternatives (tradeoffs), (4) Common pitfalls or failure modes.",
+    "databricks": "Answer with: (1) Recommended approach with specific tools, (2) Code example if applicable, (3) When to use this vs alternatives (tradeoffs), (4) Common pitfalls or failure modes.",
+    "pipeline": "Answer with: (1) Recommended approach with specific tools, (2) Code example if applicable, (3) When to use this vs alternatives (tradeoffs), (4) Common pitfalls or failure modes.",
+    "finance": "Answer with: (1) Direct answer with specific dollar amounts or percentages if known, (2) Applicable FAR/CAS clause, (3) [AUDIT] flags if this is a high-risk treatment, (4) Recommended accounting approach.",
+    "procurement": "Answer with: (1) Direct recommendation, (2) Applicable FAR section, (3) Required documentation or certification if any, (4) Risk or compliance considerations.",
+    "proposal": "Answer with: (1) Win strategy recommendation or Section L/M compliance approach, (2) Competitive discriminators to emphasize, (3) Known buyer hot buttons or RFP intent, (4) Implementation approach.",
+    "program_management": "Answer with: (1) Best practice or recommended approach, (2) Reference (ANSI/EIA 748-B, GAO, DFARS clause), (3) Implementation steps or checkpoints, (4) Common pitfalls.",
+    "hr": "Answer with: (1) Direct answer, (2) Regulatory requirement with reference (NISPOM, DOD, etc), (3) Process steps or timeline, (4) Compliance or risk flags.",
+    "safety": "Answer with: (1) Hazard classification per MIL-STD-882E (Critical/High/Medium/Low), (2) Hazard analysis steps (FMEA, FTA), (3) Recommended mitigation measures, (4) Residual risk assessment.",
+    "it_security": "Answer with: (1) Recommended control or mitigation, (2) Applicable NIST 800-171 control family (e.g., SC-7, AC-3), (3) Implementation guidance (tools, config, procedure), (4) Assessment method for audit readiness.",
+    "executive": "Answer with: (1) Strategic recommendation with business rationale, (2) Key financial or risk drivers, (3) Implementation approach and timeline, (4) Success metrics or KPIs.",
+    "regulatory": "Answer with: (1) Regulatory requirement(s) with specific clause numbers, (2) Applicability statement (when, to whom, under what conditions), (3) Compliance action or proof needed, (4) Audit/enforcement risk if non-compliant.",
+    "general_query": "Use the above knowledge to directly answer the user's question. Provide specific, actionable guidance with concrete examples and code where applicable. State your confidence level. If the knowledge above does not cover this question, say so rather than inferring.",
+})
+
 INTENT_VOICE_MAP = tenant.intent_voice_map
 
 
@@ -102,6 +122,36 @@ def _build_prompt_header(
 
     used_tokens = _estimate_tokens("\n".join(parts))
     return parts, used_tokens
+
+
+def _build_signal_briefing(
+    intent: str,
+    scored_neurons: list[NeuronScoreBreakdown],
+    neuron_map: dict[int, Neuron],
+    used_tokens: int,
+    budget: int,
+) -> tuple[int, str]:
+    """Build Query Analysis briefing showing intent, confidence, and signal context."""
+    # Compute confidence level and max relevance
+    max_relevance = max((s.combined for s in scored_neurons), default=0.0)
+    if max_relevance >= 0.8:
+        confidence = "HIGH"
+    elif max_relevance >= 0.5:
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
+
+    # Count regulatory vs functional neurons
+    functional, regulatory = _partition_neurons(scored_neurons, neuron_map)
+    neuron_count = f"{len(regulatory)} regulatory + {len(functional)} functional"
+
+    # Build briefing
+    briefing = f"## Query Analysis\nIntent: {intent} | Confidence: {confidence} (max relevance ≥ {max_relevance:.2f})\nActive neurons: {neuron_count}"
+    briefing_tokens = _estimate_tokens(briefing)
+
+    if used_tokens + briefing_tokens <= budget:
+        return used_tokens + briefing_tokens, briefing + "\n"
+    return used_tokens, ""
 
 
 def _partition_neurons(
@@ -202,6 +252,25 @@ def _pack_resolved_regulations(
     return used_tokens
 
 
+def _get_closing_instruction(intent: str, max_relevance: float) -> str:
+    """Get intent-specific closing instruction, with low-confidence calibration if needed."""
+    intent_lower = intent.lower()
+
+    # Match intent prefix to find closing instruction
+    for key, instruction in CLOSING_INSTRUCTION_MAP.items():
+        if key in intent_lower:
+            # Append low-confidence note if max relevance is below threshold
+            if max_relevance < 0.5:
+                instruction += " State your confidence level. If the knowledge above does not cover this question, say so rather than inferring."
+            return instruction
+
+    # Fallback to general_query
+    instruction = CLOSING_INSTRUCTION_MAP["general_query"]
+    if max_relevance < 0.5:
+        instruction += " State your confidence level. If the knowledge above does not cover this question, say so rather than inferring."
+    return instruction
+
+
 def assemble_prompt(
     intent: str,
     scored_neurons: list[NeuronScoreBreakdown],
@@ -220,6 +289,11 @@ def assemble_prompt(
 
     parts, used_tokens = _build_prompt_header(intent, scored_neurons, neuron_map)
 
+    # Inject signal-aware briefing showing why neurons were selected
+    used_tokens, briefing = _build_signal_briefing(intent, scored_neurons, neuron_map, used_tokens, budget)
+    if briefing:
+        parts.append(briefing)
+
     # Inject conversation continuity context from prior turns
     if prior_neuron_ids and prior_neuron_map:
         used_tokens = _pack_prior_context(
@@ -235,7 +309,11 @@ def assemble_prompt(
         used_tokens = _pack_resolved_regulations(parts, resolved_regulations, used_tokens, budget)
 
     parts.append("")
-    parts.append("Use the above knowledge to directly answer the user's question. Provide specific, actionable guidance with concrete examples and code where applicable.")
+
+    # Compute max relevance for confidence calibration
+    max_relevance = max((s.combined for s in scored_neurons), default=0.0)
+    closing = _get_closing_instruction(intent, max_relevance)
+    parts.append(closing)
 
     return "\n".join(parts)
 
@@ -254,15 +332,32 @@ def _pack_neuron(
         if tag:
             authority_tag = f" [{tag}]"
 
+    # Build signal rationale for high-scoring neurons (score >= 0.8)
+    signal_note = ""
+    if score.combined >= 0.8 and hasattr(score, "relevance") and hasattr(score, "impact"):
+        signals = []
+        if score.relevance > 0.3:
+            signals.append("relevance")
+        if score.impact > 0.3:
+            signals.append("impact")
+        if hasattr(score, "recency") and score.recency > 0.3:
+            signals.append("recency")
+        if hasattr(score, "precision") and score.precision > 0.3:
+            signals.append("precision")
+        if len(signals) >= 2:
+            signal_note = f" ← {', '.join(signals[:2])} driver"
+        elif len(signals) == 1:
+            signal_note = f" ← {signals[0]} driver"
+
     if neuron.content:
-        full_entry = f"**{neuron.label}**{authority_tag} (L{neuron.layer}, score: {score.combined:.2f})\n{neuron.content}"
+        full_entry = f"**{neuron.label}**{authority_tag} (L{neuron.layer}){signal_note}\n{neuron.content}"
         full_tokens = _estimate_tokens(full_entry)
         if used_tokens + full_tokens <= budget:
             parts.append(full_entry)
             return used_tokens + full_tokens
 
     if neuron.summary:
-        summary_entry = f"- {neuron.summary}{authority_tag} (score: {score.combined:.2f})"
+        summary_entry = f"- {neuron.summary}{authority_tag}{signal_note} (score: {score.combined:.2f})"
         summary_tokens = _estimate_tokens(summary_entry)
         if used_tokens + summary_tokens <= budget:
             parts.append(summary_entry)

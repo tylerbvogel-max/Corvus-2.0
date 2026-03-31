@@ -31,6 +31,9 @@ from app.services.prompt_assembler import assemble_prompt
 from app.services.propagation import propagate_activation
 from app.services.neuron_service import NeuronCandidate
 from app.services.scoring_engine import NeuronScoreBreakdown
+from app.services.agent_dispatcher import dispatch_agents, AgentExecution
+from app.services.agent_coordinator import coordinate
+from app.tenant import tenant
 
 
 @dataclass
@@ -621,6 +624,87 @@ async def _execute_and_collect_slots(
     return slot_results
 
 
+async def _run_agent_pipeline(
+    db: AsyncSession,
+    user_message: str,
+    ctx: PreparedContext,
+    on_stage: StageCallback,
+) -> AgentExecution:
+    """Execute the agentic orchestration path.
+
+    Assumes prepare_context() has already run (classify, score, spread).
+    Dispatches parallel domain agents, coordinates synthesis, returns AgentExecution.
+    """
+    assert ctx is not None, "ctx must be populated from prepare_context"
+    assert ctx.all_scored, "all_scored must be non-empty"
+
+    # Get closing instruction for the intent
+    from app.services.prompt_assembler import CLOSING_INSTRUCTION_MAP
+    intent_lower = ctx.intent.lower()
+    for key in CLOSING_INSTRUCTION_MAP:
+        if key in intent_lower:
+            closing_instruction = CLOSING_INSTRUCTION_MAP[key]
+            break
+    else:
+        closing_instruction = CLOSING_INSTRUCTION_MAP.get("general_query", "")
+
+    # Dispatch all domain agents concurrently
+    agent_results = await dispatch_agents(
+        all_scored=ctx.all_scored,
+        neuron_map=ctx.neuron_map,
+        query=user_message,
+        intent=ctx.intent,
+        closing_instruction=closing_instruction,
+        agent_token_budget=settings.agent_token_budget_per_domain,
+        tenant_personas=tenant.agent_role_personas,
+        model="haiku",
+        on_stage=on_stage,
+    )
+
+    # Coordinate results
+    agent_exec = await coordinate(
+        agent_results=agent_results,
+        query=user_message,
+        intent=ctx.intent,
+        escalation_threshold=settings.agent_escalation_threshold,
+        on_stage=on_stage,
+    )
+
+    return agent_exec
+
+
+def _populate_query_from_agent_execution(
+    query: Query,
+    agent_exec: AgentExecution,
+    classify_result: dict,
+) -> float:
+    """Populate query record from agent execution results."""
+    assert agent_exec is not None, "agent_exec must be non-None"
+
+    query.agent_mode = True
+    query.agent_results_json = json.dumps({
+        "agent_results": [r.__dict__ for r in agent_exec.agent_results],
+        "synthesis": agent_exec.synthesis,
+        "coordinator_model": agent_exec.coordinator_model,
+        "escalated_to_opus": agent_exec.escalated_to_opus,
+        "domains_active": agent_exec.domains_active,
+        "total_agents_dispatched": agent_exec.total_agents_dispatched,
+        "total_cost_usd": agent_exec.total_cost_usd,
+    })
+
+    # Store synthesis as primary response
+    query.response_text = agent_exec.synthesis
+    query.execute_input_tokens = agent_exec.coordinator_input_tokens
+    query.execute_output_tokens = agent_exec.coordinator_output_tokens
+
+    total_cost = agent_exec.total_cost_usd + classify_result.get("cost_usd", 0)
+    query.cost_usd = total_cost
+    query.model_version = agent_exec.coordinator_model
+
+    assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
+    return total_cost
+
+
 def _populate_query_from_results(
     query: Query,
     slot_results: list[dict],
@@ -664,11 +748,11 @@ def _build_response(
     classify_result: dict,
     slot_results: list[dict],
     total_cost: float,
+    agent_execution: AgentExecution | None = None,
 ) -> dict:
-    assert isinstance(slot_results, list) and len(slot_results) > 0, \
-        "slot_results must be non-empty"
     assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
-    return {
+
+    response_dict = {
         "query_id": query.id,
         "intent": ctx.intent if needs_neurons and ctx else None,
         "departments": ctx.departments if ctx else [],
@@ -683,6 +767,42 @@ def _build_response(
         "slots": slot_results,
         "total_cost": total_cost,
     }
+
+    # Add agent execution if available
+    if agent_execution:
+        response_dict["agent_execution"] = {
+            "agent_results": [
+                {
+                    "domain_key": r.domain_key,
+                    "department": r.department,
+                    "role_key": r.role_key,
+                    "role": r.role,
+                    "findings": r.findings,
+                    "citations": r.citations,
+                    "confidence": r.confidence,
+                    "flags": r.flags,
+                    "neuron_ids": r.neuron_ids,
+                    "input_tokens": r.input_tokens,
+                    "output_tokens": r.output_tokens,
+                    "cost_usd": r.cost_usd,
+                    "duration_ms": r.duration_ms,
+                    "error": r.error,
+                    "error_message": r.error_message,
+                }
+                for r in agent_execution.agent_results
+            ],
+            "synthesis": agent_execution.synthesis,
+            "coordinator_model": agent_execution.coordinator_model,
+            "escalated_to_opus": agent_execution.escalated_to_opus,
+            "domains_active": agent_execution.domains_active,
+            "coordinator_input_tokens": agent_execution.coordinator_input_tokens,
+            "coordinator_output_tokens": agent_execution.coordinator_output_tokens,
+            "coordinator_cost_usd": agent_execution.coordinator_cost_usd,
+            "total_agents_dispatched": agent_execution.total_agents_dispatched,
+            "total_cost_usd": agent_execution.total_cost_usd,
+        }
+
+    return response_dict
 
 
 async def _update_counters_and_fire(
@@ -748,32 +868,46 @@ async def execute_query(
     neuron_map = ctx.neuron_map if ctx else {}
     max_top_k = ctx.neurons_activated if ctx else max_top_k
 
-    prompt_cache: dict[tuple[int, int], str] = {}
-    primary_budget = _compute_neuron_slot_max(slot_specs, "token_budget", settings.token_budget)
-    primary_top_k = _compute_neuron_slot_max(slot_specs, "top_k", settings.top_k_neurons)
-    primary_prompt = _get_cached_prompt(
-        prompt_cache, primary_budget, primary_top_k, intent, all_scored, neuron_map,
-    ) if needs_neurons else ""
-
-    query = _create_query_record(user_message, ctx, needs_neurons, slot_specs, primary_prompt, classify_result)
+    query = _create_query_record(user_message, ctx, needs_neurons, slot_specs, "", classify_result)
     db.add(query)
     await db.flush()
 
-    slot_results = await _execute_and_collect_slots(
-        slot_specs, user_message, prompt_cache, intent, all_scored, neuron_map, on_stage,
-        chat_style=chat_style,
-    )
-    total_cost = _populate_query_from_results(query, slot_results, all_scored, neuron_map, classify_result)
+    # Feature flag gate: choose execution path
+    if settings.agent_orchestration_enabled and ctx:
+        # Agentic orchestration path
+        agent_exec = await _run_agent_pipeline(db, user_message, ctx, on_stage)
+        total_cost = _populate_query_from_agent_execution(query, agent_exec, classify_result)
+        slot_results = []
+        agent_execution_result = agent_exec
+    else:
+        # Classic slot execution path
+        prompt_cache: dict[tuple[int, int], str] = {}
+        primary_budget = _compute_neuron_slot_max(slot_specs, "token_budget", settings.token_budget)
+        primary_top_k = _compute_neuron_slot_max(slot_specs, "top_k", settings.top_k_neurons)
+        primary_prompt = _get_cached_prompt(
+            prompt_cache, primary_budget, primary_top_k, intent, all_scored, neuron_map,
+        ) if needs_neurons else ""
+        query.assembled_prompt = primary_prompt
+
+        slot_results = await _execute_and_collect_slots(
+            slot_specs, user_message, prompt_cache, intent, all_scored, neuron_map, on_stage,
+            chat_style=chat_style,
+        )
+        total_cost = _populate_query_from_results(query, slot_results, all_scored, neuron_map, classify_result)
+        agent_execution_result = None
+
     await _update_counters_and_fire(db, query, slot_results, classify_result, needs_neurons, all_scored)
 
     # Postconditions (JPL Power of Ten Rule 5)
-    assert all(s is not None for s in slot_results), \
-        "All slot results must be populated after execution"
+    if not settings.agent_orchestration_enabled or not ctx:
+        assert all(s is not None for s in slot_results), \
+            "All slot results must be populated after execution"
     assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
 
     return _build_response(
         query, ctx, needs_neurons, all_scored, max_top_k,
         neuron_map, classify_result, slot_results, total_cost,
+        agent_execution=agent_execution_result,
     )
 
 
