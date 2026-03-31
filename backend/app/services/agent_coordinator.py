@@ -2,10 +2,12 @@
 
 Takes a list of AgentResult from parallel domain agents, decides whether to
 escalate to Opus, builds a synthesis prompt, and executes the final LLM call.
+Optionally runs verification agent in parallel (Session 3+).
 """
 
+import asyncio
 import time
-from app.services.agent_dispatcher import AgentResult, AgentExecution
+from app.services.agent_dispatcher import AgentResult, AgentExecution, VerificationResult, _dispatch_verification_agent
 from app.services.agent_templates import build_coordinator_prompt
 from app.services.claude_cli import claude_chat
 from app.config import settings
@@ -67,6 +69,75 @@ def _compute_aggregate_confidence(
     return total_confidence / len(non_error_results)
 
 
+async def _execute_coordinator_phase(
+    coordinator_prompt: str,
+    user_message: str,
+    agent_results: list[AgentResult],
+    coordinator_model: str,
+) -> dict:
+    """Execute coordinator with fallback chain (JPL-4: extract helper to keep coordinate() under 100 lines)."""
+    try:
+        response = await claude_chat(
+            system_prompt=coordinator_prompt,
+            user_message=user_message,
+            max_tokens=2000,
+            model=coordinator_model,
+        )
+        return {
+            "synthesis": response.get("text", ""),
+            "input_tokens": response.get("input_tokens", 0),
+            "output_tokens": response.get("output_tokens", 0),
+            "cost_usd": response.get("cost_usd", 0),
+            "error": False,
+            "model": coordinator_model,
+        }
+    except Exception as e:
+        # Option 1 fallback: re-run agent findings through Sonnet
+        try:
+            non_error_findings = [r for r in agent_results if not r.error]
+            if not non_error_findings:
+                best_agent = max(agent_results, key=lambda r: r.confidence)
+                non_error_findings = [best_agent]
+
+            findings_summary = "\n".join([
+                f"**{r.role} ({r.domain_key})**: {r.findings}"
+                for r in non_error_findings
+            ])
+
+            fallback_prompt = f"""Synthesize these expert findings into a single coherent answer:
+
+{findings_summary}
+
+Lead with the most important finding. Surface all [RISK], [AUDIT], [CRITICAL] flags.
+Note any conflicts between experts. State your confidence level."""
+
+            fallback_response = await claude_chat(
+                system_prompt="You are a synthesis expert. Integrate the findings below.",
+                user_message=fallback_prompt,
+                max_tokens=2000,
+                model="sonnet",
+            )
+
+            return {
+                "synthesis": fallback_response.get("text", ""),
+                "input_tokens": fallback_response.get("input_tokens", 0),
+                "output_tokens": fallback_response.get("output_tokens", 0),
+                "cost_usd": fallback_response.get("cost_usd", 0),
+                "error": False,
+                "model": "sonnet-fallback",
+            }
+        except Exception as fallback_e:
+            best_agent = max(agent_results, key=lambda r: r.confidence)
+            return {
+                "synthesis": f"[Coordinator & Sonnet fallback both failed. Using best agent finding ({best_agent.role})]\n{best_agent.findings}",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0,
+                "error": True,
+                "model": "fallback",
+            }
+
+
 async def coordinate(
     agent_results: list[AgentResult],
     query: str,
@@ -74,23 +145,7 @@ async def coordinate(
     escalation_threshold: float = 0.7,
     on_stage: callable = None,
 ) -> AgentExecution:
-    """Synthesize agent results into a final response.
-
-    Single-domain shortcut: if len(agent_results)==1, returns that agent's findings
-    directly without a coordinator LLM call.
-
-    Multi-domain: decides Haiku vs Opus, builds coordinator prompt, executes synthesis.
-
-    Args:
-        agent_results: list of AgentResult from dispatch_agents()
-        query: user query string
-        intent: classified intent
-        escalation_threshold: confidence threshold for Opus escalation
-        on_stage: optional callback for progress events
-
-    Returns:
-        AgentExecution with synthesis text and full tracing
-    """
+    """Synthesize agent results. Single-domain uses agent findings directly; multi-domain coordinates."""
     assert agent_results, "agent_results must be non-empty"
     assert query, "query must be non-empty"
 
@@ -125,7 +180,7 @@ async def coordinate(
 
     # Build coordinator prompt
     coordinator_prompt = build_coordinator_prompt(
-        [r.__dict__ for r in agent_results],  # Convert to dicts for JSON serialization
+        [r.__dict__ for r in agent_results],
         query,
         intent,
     )
@@ -137,40 +192,34 @@ Lead with the most actionable finding. Surface all [RISK], [AUDIT], [CRITICAL] f
 Cite which agent provided each key claim. Note any conflicts between agents.
 State your overall confidence level."""
 
-    # Execute coordinator
-    try:
-        response = await claude_chat(
-            system_prompt=coordinator_prompt,
-            user_message=user_message,
-            max_tokens=2000,
-            model=coordinator_model,
-        )
+    # Run coordinator and verification agent in parallel
+    tasks = [asyncio.create_task(
+        _execute_coordinator_phase(coordinator_prompt, user_message, agent_results, coordinator_model)
+    )]
+    if settings.agent_verification_enabled:
+        tasks.append(asyncio.create_task(
+            _dispatch_verification_agent(agent_results, "", query, intent, model="haiku")
+        ))
 
-        synthesis = response.get("text", "")
-        coord_input_tokens = response.get("input_tokens", 0)
-        coord_output_tokens = response.get("output_tokens", 0)
-        coord_cost_usd = response.get("cost_usd", 0)
+    results = await asyncio.gather(*tasks)
+    coord_result, verification_result = results[0], (results[1] if len(results) > 1 else None)
+    if "model" in coord_result:
+        coordinator_model = coord_result["model"]
 
-    except Exception as e:
-        # Graceful fallback: return best agent's findings if coordinator fails
-        best_agent = max(agent_results, key=lambda r: r.confidence)
-        synthesis = f"[Coordinator error: {str(e)[:50]}. Using best agent finding:]\n{best_agent.findings}"
-        coord_input_tokens = 0
-        coord_output_tokens = 0
-        coord_cost_usd = 0
-
-    total_agents = len(agent_results)
-    total_cost = sum(r.cost_usd for r in agent_results) + coord_cost_usd
+    total_cost = sum(r.cost_usd for r in agent_results) + coord_result["cost_usd"]
+    if verification_result:
+        total_cost += verification_result.cost_usd
 
     return AgentExecution(
         agent_results=agent_results,
-        synthesis=synthesis,
+        synthesis=coord_result["synthesis"],
         coordinator_model=coordinator_model,
         escalated_to_opus=should_escalate,
         domains_active=[r.domain_key for r in agent_results],
-        total_agents_dispatched=total_agents,
-        coordinator_input_tokens=coord_input_tokens,
-        coordinator_output_tokens=coord_output_tokens,
-        coordinator_cost_usd=coord_cost_usd,
+        total_agents_dispatched=len(agent_results),
+        coordinator_input_tokens=coord_result["input_tokens"],
+        coordinator_output_tokens=coord_result["output_tokens"],
+        coordinator_cost_usd=coord_result["cost_usd"],
         total_cost_usd=total_cost,
+        verification_result=verification_result,
     )

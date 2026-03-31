@@ -13,10 +13,8 @@ class QuerySlotRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000)
-    modes: list[str] = ["haiku_neuron"]
-    token_budget: int | None = Field(None, ge=1000, le=32000)
-    slots_v2: list[QuerySlotRequest] | None = None
-    chat_style: str | None = None
+    agent_mode: bool = True
+    confidence_threshold: float = Field(0.5, ge=0.0, le=1.0)
     prior_neuron_ids: list[int] | None = None
 
 
@@ -90,6 +88,18 @@ class AgentResultOut(BaseModel):
     error_message: str = ""
 
 
+class VerificationResultOut(BaseModel):
+    """Result from verification agent critique."""
+    critique: str
+    gaps: list[str] = []
+    confidence_adjustment: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0
+    error: bool = False
+    error_message: str = ""
+
+
 class AgentExecutionOut(BaseModel):
     """Result from full agent dispatch and coordination."""
     agent_results: list[AgentResultOut] = []
@@ -102,6 +112,7 @@ class AgentExecutionOut(BaseModel):
     coordinator_cost_usd: float = 0
     total_agents_dispatched: int = 0
     total_cost_usd: float = 0
+    verification_result: VerificationResultOut | None = None
 
 
 class QueryResponse(BaseModel):

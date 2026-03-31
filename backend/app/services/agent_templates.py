@@ -240,15 +240,20 @@ def build_agent_dynamic_section(
     parts.append("## Reference Knowledge\n")
     for score, neuron in neurons:
         if neuron.content:
-            entry = f"**{neuron.label}** (Layer {neuron.layer}, score: {score.combined:.2f})\n{neuron.content}"
+            # Format: [N-{id}] label with metadata for traceability
+            dept_info = f" | Dept: {neuron.department}" if neuron.department else ""
+            role_info = f" | Role: {neuron.role_key}" if neuron.role_key else ""
+            lookup_hint = f" | DB lookup: SELECT * FROM neurons WHERE id = {neuron.id}"
+            entry = f"**[N-{neuron.id}] {neuron.label}**\nLayer: {neuron.layer}{dept_info}{role_info}\nScore: {score.combined:.2f}{lookup_hint}\n{neuron.content}"
         elif neuron.summary:
-            entry = f"- {neuron.summary} (score: {score.combined:.2f})"
+            entry = f"- [N-{neuron.id}] {neuron.summary} (score: {score.combined:.2f})"
         else:
             continue
         parts.append(entry)
 
     # Closing instruction
-    parts.append(f"\n{closing_instruction}")
+    closing_with_citation = f"{closing_instruction}\n\nCite referenced neurons by their [N-{{id}}] identifier inline with your findings."
+    parts.append(f"\n{closing_with_citation}")
 
     return "\n".join(parts)
 

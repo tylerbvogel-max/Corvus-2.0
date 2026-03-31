@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Query, NeuronFiring, Neuron, EvalScore, NeuronRefinement, SynapticLearningEvent
 from app.schemas import (
-    QueryRequest, QueryResponse, QuerySummary, QueryDetail, NeuronHit, SlotResult,
+    QueryRequest, QueryResponse, QuerySummary, QueryDetail, NeuronHit,
     EvalRequest, EvalResponse, EvalScoreOut, EvalScoreSummary,
     RatingRequest, RatingResponse,
     RefineRequest, RefineResponse, NeuronUpdateSuggestion, NewNeuronSuggestion,
@@ -34,16 +34,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 
 router = APIRouter(tags=["query"])
-
-def _build_valid_modes() -> set[str]:
-    """Generate valid modes from MODEL_REGISTRY: {model}_neuron and {model}_raw for each model."""
-    modes: set[str] = set()
-    for name in MODEL_REGISTRY:
-        modes.add(f"{name}_neuron")
-        modes.add(f"{name}_raw")
-    return modes
-
-VALID_MODES = _build_valid_modes()
 
 
 # ── Lightweight context endpoint for Corvus integration ──
@@ -380,7 +370,12 @@ async def get_query_detail(query_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/query", response_model=QueryResponse)
 async def post_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
-    """Execute a query through the full neuron pipeline: classify, score, assemble, execute."""
+    """Execute a query through the agent orchestration pipeline (Session 3+).
+
+    Routes based on agent_mode:
+    - agent_mode=True: classify → score → partition → dispatch agents → synthesize
+    - agent_mode=False: classify → score → assemble → single Haiku call
+    """
     # JPL Rule 5: message must be non-empty (defense-in-depth beyond Pydantic)
     assert req.message and req.message.strip(), "Query message must be non-empty"
 
@@ -396,21 +391,12 @@ async def post_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
         )
 
     try:
-        if req.slots_v2:
-            # v2: per-slot budgets
-            for s in req.slots_v2:
-                if s.mode not in VALID_MODES:
-                    raise HTTPException(status_code=400, detail=f"Invalid mode: {s.mode}")
-            slots_v2 = [s.model_dump() for s in req.slots_v2]
-            result = await execute_query(db, req.message, modes=[], slots_v2=slots_v2, chat_style=req.chat_style, prior_neuron_ids=req.prior_neuron_ids)
-        else:
-            # Legacy: shared budget
-            for m in req.modes:
-                if m not in VALID_MODES:
-                    raise HTTPException(status_code=400, detail=f"Invalid mode: {m}")
-            if not req.modes:
-                raise HTTPException(status_code=400, detail="At least one mode required")
-            result = await execute_query(db, req.message, modes=req.modes, token_budget=req.token_budget, chat_style=req.chat_style, prior_neuron_ids=req.prior_neuron_ids)
+        result = await execute_query(
+            db, req.message,
+            agent_mode=req.agent_mode,
+            confidence_threshold=req.confidence_threshold,
+            prior_neuron_ids=req.prior_neuron_ids,
+        )
     except HTTPException:
         raise
     except RuntimeError as e:
@@ -420,15 +406,15 @@ async def post_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
 
     # ── Output Checks: risk tagging + grounding ──
     output_checks: list[dict] = []
-    for slot in result.get("slots", []):
-        response_text = slot.get("response", "")
+    response_text = result.get("response_text", "")
+    if response_text:
         risk_flags = check_output_risk(response_text)
         grounding = check_output_grounding(
             response_text,
             result.get("assembled_prompt"),
-        ) if slot.get("neurons") else {"grounded": None, "confidence": None, "reason": "Raw mode — no neuron context"}
+        ) if result.get("neuron_scores") else {"grounded": None, "confidence": None, "reason": "No neuron context"}
         output_checks.append({
-            "mode": slot.get("mode"),
+            "mode": "agent" if result.get("agent_execution") else "direct",
             "risk_flags": risk_flags,
             "grounding": grounding,
         })
@@ -463,33 +449,28 @@ async def post_query_stream(req: QueryRequest, db: AsyncSession = Depends(get_db
                 await queue.put({"event": "error", "data": {"message": "Input blocked by safety filter"}})
                 return
 
-            # Execute pipeline with stage callbacks
-            if req.slots_v2:
-                for s in req.slots_v2:
-                    if s.mode not in VALID_MODES:
-                        await queue.put({"event": "error", "data": {"message": f"Invalid mode: {s.mode}"}})
-                        return
-                slots_v2 = [s.model_dump() for s in req.slots_v2]
-                result = await execute_query(db, req.message, modes=[], slots_v2=slots_v2, on_stage=on_stage, chat_style=req.chat_style, prior_neuron_ids=req.prior_neuron_ids)
-            else:
-                for m in req.modes:
-                    if m not in VALID_MODES:
-                        await queue.put({"event": "error", "data": {"message": f"Invalid mode: {m}"}})
-                        return
-                if not req.modes:
-                    await queue.put({"event": "error", "data": {"message": "At least one mode required"}})
-                    return
-                result = await execute_query(db, req.message, modes=req.modes, token_budget=req.token_budget, on_stage=on_stage, chat_style=req.chat_style, prior_neuron_ids=req.prior_neuron_ids)
+            # Execute pipeline with stage callbacks (Session 3 unified path)
+            result = await execute_query(
+                db, req.message,
+                agent_mode=req.agent_mode,
+                confidence_threshold=req.confidence_threshold,
+                on_stage=on_stage,
+                prior_neuron_ids=req.prior_neuron_ids,
+            )
 
             # Output checks
             output_checks: list[dict] = []
-            for slot in result.get("slots", []):
-                response_text = slot.get("response", "")
+            response_text = result.get("response_text", "")
+            if response_text:
                 risk_flags = check_output_risk(response_text)
                 grounding = check_output_grounding(
                     response_text, result.get("assembled_prompt"),
-                ) if slot.get("neurons") else {"grounded": None, "confidence": None, "reason": "Raw mode"}
-                output_checks.append({"mode": slot.get("mode"), "risk_flags": risk_flags, "grounding": grounding})
+                ) if result.get("neuron_scores") else {"grounded": None, "confidence": None, "reason": "No neuron context"}
+                output_checks.append({
+                    "mode": "agent" if result.get("agent_execution") else "direct",
+                    "risk_flags": risk_flags,
+                    "grounding": grounding,
+                })
 
             await on_stage("output_checks", {"status": "done", "detail": {"checked": len(output_checks)}})
 

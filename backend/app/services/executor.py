@@ -624,16 +624,59 @@ async def _execute_and_collect_slots(
     return slot_results
 
 
+async def _run_direct_call(
+    ctx: PreparedContext,
+    user_message: str,
+    on_stage: StageCallback,
+) -> str:
+    """Execute direct call path (agent_mode=false): single Haiku call with assembled neurons.
+
+    Uses ctx.system_prompt (already assembled by prepare_context) + user message.
+    Returns response text only; cost/token tracking handled separately.
+    """
+    assert ctx is not None, "ctx must be populated from prepare_context"
+
+    t0 = time.monotonic()
+    result = await llm_chat(
+        prompt=ctx.system_prompt,
+        user_message=user_message,
+        max_tokens=4096,
+        model="haiku",
+    )
+    duration_ms = round((time.monotonic() - t0) * 1000)
+
+    if on_stage:
+        await on_stage("execute_llm", {
+            "status": "done",
+            "detail": {
+                "model": "haiku",
+                "duration_ms": duration_ms,
+                "tokens_in": result.get("input_tokens", 0),
+                "tokens_out": result.get("output_tokens", 0),
+            },
+        })
+
+    return result.get("text", "")
+
+
 async def _run_agent_pipeline(
     db: AsyncSession,
     user_message: str,
     ctx: PreparedContext,
-    on_stage: StageCallback,
+    confidence_threshold: float = 0.5,
+    on_stage: StageCallback = None,
 ) -> AgentExecution:
     """Execute the agentic orchestration path.
 
     Assumes prepare_context() has already run (classify, score, spread).
     Dispatches parallel domain agents, coordinates synthesis, returns AgentExecution.
+
+    Args:
+        db: async session
+        user_message: original user query
+        ctx: PreparedContext from prepare_context()
+        confidence_threshold: minimum neuron score to include
+        on_stage: optional callback for progress events
     """
     assert ctx is not None, "ctx must be populated from prepare_context"
     assert ctx.all_scored, "all_scored must be non-empty"
@@ -656,6 +699,7 @@ async def _run_agent_pipeline(
         intent=ctx.intent,
         closing_instruction=closing_instruction,
         agent_token_budget=settings.agent_token_budget_per_domain,
+        confidence_threshold=confidence_threshold,
         tenant_personas=tenant.agent_role_personas,
         model="haiku",
         on_stage=on_stage,
@@ -839,74 +883,66 @@ async def _update_counters_and_fire(
 async def execute_query(
     db: AsyncSession,
     user_message: str,
-    modes: list[str],
-    token_budget: int | None = None,
-    slots_v2: list[dict] | None = None,
+    agent_mode: bool = True,
+    confidence_threshold: float = 0.5,
     on_stage: StageCallback = None,
-    chat_style: str | None = None,
     prior_neuron_ids: list[int] | None = None,
 ) -> dict:
-    """Run the pipeline for all requested slots.
+    """Run the pipeline with per-query agent control (Session 3+).
 
-    Supports two calling conventions:
-    - Legacy: modes=["haiku_neuron", "opus_raw"], token_budget=4000
-    - v2: slots_v2=[{mode, token_budget, top_k, label}, ...]
-
-    Classification and scoring happen once (with max top_k).
-    Assembly happens per (budget, top_k) pair.
+    Unified orchestration:
+    - agent_mode=True: partition neurons by domain, dispatch agents, synthesize
+    - agent_mode=False: classify, score, assemble single prompt, direct Haiku call
     """
-    slot_specs = _normalize_slot_specs(modes, token_budget, slots_v2)
-    needs_neurons = any(s["mode"] in NEURON_MODES for s in slot_specs)
-    max_top_k = _compute_neuron_slot_max(slot_specs, "top_k", settings.top_k_neurons)
+    # Preconditions (JPL Rule 5)
+    assert user_message and user_message.strip(), "user_message must be non-empty"
+    assert 0.0 <= confidence_threshold <= 1.0, "confidence_threshold must be in [0.0, 1.0]"
 
+    # Always run neuron pipeline (classify → score → spread → assemble)
+    slot_specs = [{"mode": "placeholder", "token_budget": settings.token_budget, "top_k": settings.top_k_neurons}]
     ctx, classify_result = await _run_neuron_pipeline(
-        db, user_message, slot_specs, max_top_k, on_stage,
+        db, user_message, slot_specs, settings.top_k_neurons, on_stage,
         prior_neuron_ids=prior_neuron_ids,
     )
-    intent = ctx.intent if ctx else "general_query"
-    all_scored = ctx.all_scored if ctx else []
-    neuron_map = ctx.neuron_map if ctx else {}
-    max_top_k = ctx.neurons_activated if ctx else max_top_k
 
-    query = _create_query_record(user_message, ctx, needs_neurons, slot_specs, "", classify_result)
+    # Create query record early (before execution)
+    query = _create_query_record(user_message, ctx, needs_neurons=True, slot_specs=slot_specs, primary_prompt="", classify_result=classify_result)
     db.add(query)
     await db.flush()
 
-    # Feature flag gate: choose execution path
-    if settings.agent_orchestration_enabled and ctx:
-        # Agentic orchestration path
-        agent_exec = await _run_agent_pipeline(db, user_message, ctx, on_stage)
+    intent = ctx.intent if ctx else "general_query"
+    all_scored = ctx.all_scored if ctx else []
+    neuron_map = ctx.neuron_map if ctx else {}
+    slot_results = []
+    agent_execution_result = None
+    response_text = ""
+
+    # Route based on agent_mode
+    if agent_mode and ctx:
+        # Agent orchestration path
+        agent_exec = await _run_agent_pipeline(db, user_message, ctx, confidence_threshold, on_stage)
         total_cost = _populate_query_from_agent_execution(query, agent_exec, classify_result)
-        slot_results = []
         agent_execution_result = agent_exec
+        response_text = agent_exec.synthesis
     else:
-        # Classic slot execution path
-        prompt_cache: dict[tuple[int, int], str] = {}
-        primary_budget = _compute_neuron_slot_max(slot_specs, "token_budget", settings.token_budget)
-        primary_top_k = _compute_neuron_slot_max(slot_specs, "top_k", settings.top_k_neurons)
-        primary_prompt = _get_cached_prompt(
-            prompt_cache, primary_budget, primary_top_k, intent, all_scored, neuron_map,
-        ) if needs_neurons else ""
-        query.assembled_prompt = primary_prompt
+        # Direct call path: use assembled neurons + single Haiku call
+        if ctx:
+            query.assembled_prompt = ctx.system_prompt
+            response_text = await _run_direct_call(ctx, user_message, on_stage)
+            # Populate response on Query record
+            query.response_text = response_text
+            query.model_version = "haiku"
+        total_cost = classify_result.get("cost_usd", 0)
 
-        slot_results = await _execute_and_collect_slots(
-            slot_specs, user_message, prompt_cache, intent, all_scored, neuron_map, on_stage,
-            chat_style=chat_style,
-        )
-        total_cost = _populate_query_from_results(query, slot_results, all_scored, neuron_map, classify_result)
-        agent_execution_result = None
+    query.cost_usd = total_cost
+    await _update_counters_and_fire(db, query, slot_results, classify_result, needs_neurons=True, all_scored=all_scored)
 
-    await _update_counters_and_fire(db, query, slot_results, classify_result, needs_neurons, all_scored)
-
-    # Postconditions (JPL Power of Ten Rule 5)
-    if not settings.agent_orchestration_enabled or not ctx:
-        assert all(s is not None for s in slot_results), \
-            "All slot results must be populated after execution"
+    # Postcondition (JPL Rule 5)
     assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
 
     return _build_response(
-        query, ctx, needs_neurons, all_scored, max_top_k,
-        neuron_map, classify_result, slot_results, total_cost,
+        query, ctx, needs_neurons=True, all_scored=all_scored, max_top_k=len(all_scored),
+        neuron_map=neuron_map, classify_result=classify_result, slot_results=slot_results, total_cost=total_cost,
         agent_execution=agent_execution_result,
     )
 
