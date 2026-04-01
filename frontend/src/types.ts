@@ -73,6 +73,8 @@ export interface SlotResult {
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
   duration_ms: number;
   token_budget: number | null;
   top_k: number | null;
@@ -288,6 +290,7 @@ export interface RefineResponse {
   input_tokens: number;
   output_tokens: number;
   reasoning: string;
+  neuron_vs_raw_verdict: string;
   updates: NeuronUpdateSuggestion[];
   new_neurons: NewNeuronSuggestion[];
 }

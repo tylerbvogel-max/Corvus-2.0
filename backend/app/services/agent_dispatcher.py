@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from app.models import Neuron
 from app.services.scoring_engine import NeuronScoreBreakdown
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat as claude_chat
 from app.services.agent_templates import build_agent_system_prompt, build_agent_dynamic_section
 from app.config import settings
 

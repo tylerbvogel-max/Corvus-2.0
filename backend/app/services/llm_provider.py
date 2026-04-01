@@ -177,17 +177,18 @@ async def _anthropic_chat(
     cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
     output_tokens = usage.output_tokens
-    input_tokens = base_input + cache_create + cache_read
 
     cost = _estimate_cost_anthropic(
         model_info, base_input, cache_create, cache_read, output_tokens,
     )
 
-    assert input_tokens >= 0, f"input_tokens must be non-negative, got {input_tokens}"
+    assert base_input >= 0, f"base_input must be non-negative, got {base_input}"
     assert output_tokens >= 0, f"output_tokens must be non-negative, got {output_tokens}"
     return {
         "text": text,
-        "input_tokens": input_tokens,
+        "input_tokens": base_input,
+        "cache_creation_tokens": cache_create,
+        "cache_read_tokens": cache_read,
         "output_tokens": output_tokens,
         "cost_usd": cost,
         "model_version": response.model,

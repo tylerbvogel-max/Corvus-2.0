@@ -34,6 +34,8 @@ class SlotResult(BaseModel):
     input_tokens: int
     output_tokens: int
     cost_usd: float
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
     token_budget: int | None = None
     top_k: int | None = None
     label: str | None = None
@@ -143,7 +145,7 @@ class QueryResponse(BaseModel):
 
 
 class EvalRequest(BaseModel):
-    model: str = Field("haiku", min_length=1)
+    model: str = Field("sonnet", min_length=1)
 
 
 class EvalScoreOut(BaseModel):
@@ -336,7 +338,7 @@ class QueryDetail(BaseModel):
 
 
 class RefineRequest(BaseModel):
-    model: str = Field("haiku", min_length=1)
+    model: str = Field("opus", min_length=1)
     max_tokens: int = Field(4096, ge=512, le=16384)
     user_context: str | None = Field(None, max_length=16000)
 
@@ -367,6 +369,7 @@ class RefineResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     reasoning: str
+    neuron_vs_raw_verdict: str = ""
     updates: list[NeuronUpdateSuggestion] = []
     new_neurons: list[NewNeuronSuggestion] = []
 

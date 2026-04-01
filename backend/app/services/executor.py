@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.models import Neuron, Query, NeuronEdge
 from app.services.classifier import classify_query
-from app.services.claude_cli import claude_chat as llm_chat, MODEL_REGISTRY
+from app.services.llm_provider import llm_chat, MODEL_REGISTRY
 from app.services.neuron_service import (
     get_neurons_by_filter,
     get_system_state,
@@ -256,14 +256,18 @@ async def prepare_context(
     classify_result, query_embedding, intent, departments, role_keys, keywords = \
         await _embed_and_classify(user_message)
     await _emit("embed_query")
-    await _emit("classify", {"status": "done", "detail": {"intent": intent, "departments": departments}})
+    await _emit("classify", {"status": "done", "detail": {"intent": intent, "departments": departments, "role_keys": role_keys, "keywords": keywords}})
 
     state = await get_system_state(db)
     scored, scored_engrams = await _select_and_score_candidates(
         db, query_embedding, effective_pool, keywords, departments, role_keys, state.total_queries,
     )
     await _emit("semantic_prefilter", {"status": "done", "detail": {"candidates": len(scored), "engram_candidates": len(scored_engrams)}})
-    await _emit("score_neurons", {"status": "done", "detail": {"scored": len(scored)}})
+
+    # Load neuron map early for score_neurons event
+    neuron_map_early = await _load_neuron_map(db, [s.neuron_id for s in scored[:effective_top_k]])
+    neuron_scores_early = _build_neuron_score_dicts(scored[:effective_top_k], neuron_map_early)
+    await _emit("score_neurons", {"status": "done", "detail": {"scored": len(scored), "neuron_scores": neuron_scores_early}})
 
     # Continuity boost: neurons from prior conversation turns get a 1.3x lift.
     if prior_neuron_ids:
@@ -274,7 +278,7 @@ async def prepare_context(
         scored.sort(key=lambda s: s.combined, reverse=True)
 
     scored = await spread_activation(db, scored, effective_top_k)
-    await _emit("spread_activation", {"status": "done", "detail": {"propagated": len(scored)}})
+    await _emit("spread_activation", {"status": "done", "detail": {"propagated": len(scored), "neurons_activated": len(scored)}})
     all_scored, effective_top_k = await _apply_inhibition_and_boost(
         db, scored, effective_top_k, project_path,
     )
@@ -302,7 +306,7 @@ async def prepare_context(
         prior_neuron_ids=prior_neuron_ids, prior_neuron_map=prior_neuron_map,
         resolved_regulations=resolved_regulations,
     )
-    await _emit("assemble_prompt", {"status": "done", "detail": {"neurons_activated": min(len(all_scored), effective_top_k), "engrams_resolved": len(resolved_regulations)}})
+    await _emit("assemble_prompt", {"status": "done", "detail": {"neurons_activated": min(len(all_scored), effective_top_k), "engrams_resolved": len(resolved_regulations), "assembled_prompt": system_prompt}})
 
     if project_path and getattr(settings, 'project_cache_enabled', False):
         from app.services.project_cache import record_project_firings
@@ -538,6 +542,8 @@ def _format_slot_result(spec: dict, result: dict) -> dict:
         "input_tokens": result["input_tokens"],
         "output_tokens": result["output_tokens"],
         "cost_usd": result["cost_usd"],
+        "cache_creation_tokens": result.get("cache_creation_tokens", 0),
+        "cache_read_tokens": result.get("cache_read_tokens", 0),
         "duration_ms": result.get("duration_ms", 0),
         "token_budget": budget if mode in NEURON_MODES else None,
         "top_k": slot_top_k if mode in NEURON_MODES else None,
@@ -630,20 +636,22 @@ async def _run_direct_call(
     ctx: PreparedContext,
     user_message: str,
     on_stage: StageCallback,
+    model: str = "haiku",
 ) -> dict:
-    """Execute direct call path (agent_mode=false): single Haiku call with assembled neurons.
+    """Execute direct call path (agent_mode=false): single LLM call with assembled neurons.
 
     Uses ctx.system_prompt (already assembled by prepare_context) + user message.
-    Returns dict with text, input_tokens, output_tokens, cost_usd.
+    Returns dict with text, input_tokens, output_tokens, cost_usd, cache tokens.
     """
     assert ctx is not None, "ctx must be populated from prepare_context"
+    assert model, "model must be non-empty"
 
     t0 = time.monotonic()
     result = await llm_chat(
         system_prompt=ctx.system_prompt,
         user_message=user_message,
         max_tokens=4096,
-        model="haiku",
+        model=model,
     )
     duration_ms = round((time.monotonic() - t0) * 1000)
 
@@ -651,7 +659,7 @@ async def _run_direct_call(
         await on_stage("execute_llm", {
             "status": "done",
             "detail": {
-                "model": "haiku",
+                "model": model,
                 "duration_ms": duration_ms,
                 "tokens_in": result.get("input_tokens", 0),
                 "tokens_out": result.get("output_tokens", 0),
@@ -663,6 +671,9 @@ async def _run_direct_call(
         "input_tokens": result.get("input_tokens", 0),
         "output_tokens": result.get("output_tokens", 0),
         "cost_usd": result.get("cost_usd", 0),
+        "cache_creation_tokens": result.get("cache_creation_tokens", 0),
+        "cache_read_tokens": result.get("cache_read_tokens", 0),
+        "model_version": result.get("model_version"),
     }
 
 
@@ -672,6 +683,7 @@ async def _run_agent_pipeline(
     ctx: PreparedContext,
     confidence_threshold: float = 0.5,
     on_stage: StageCallback = None,
+    model: str = "haiku",
 ) -> AgentExecution:
     """Execute the agentic orchestration path.
 
@@ -684,6 +696,7 @@ async def _run_agent_pipeline(
         ctx: PreparedContext from prepare_context()
         confidence_threshold: minimum neuron score to include
         on_stage: optional callback for progress events
+        model: model to use for agents and coordinator
     """
     assert ctx is not None, "ctx must be populated from prepare_context"
     assert ctx.all_scored, "all_scored must be non-empty"
@@ -708,7 +721,7 @@ async def _run_agent_pipeline(
         agent_token_budget=settings.agent_token_budget_per_domain,
         confidence_threshold=confidence_threshold,
         tenant_personas=tenant.agent_role_personas,
-        model="haiku",
+        model=model,
         on_stage=on_stage,
     )
 
@@ -719,6 +732,7 @@ async def _run_agent_pipeline(
         intent=ctx.intent,
         escalation_threshold=settings.agent_escalation_threshold,
         on_stage=on_stage,
+        base_model=model,
     )
 
     return agent_exec
@@ -900,6 +914,9 @@ async def _execute_slot(
     Returns SlotResult dict with response, tokens, cost, error info.
     Emits per-slot completion events via on_stage callback.
     """
+    assert isinstance(slot, dict), "slot must be a dict"
+    assert isinstance(user_message, str) and user_message.strip(), "user_message must be non-empty"
+
     mode = slot.get("mode", "haiku_neuron")
     token_budget = slot.get("token_budget", settings.token_budget)
     agent_mode = slot.get("agent_mode", False)
@@ -912,37 +929,19 @@ async def _execute_slot(
     slot_type = parts[1] if len(parts) > 1 else "neuron"
     uses_neurons = slot_type == "neuron"
 
+    # Non-Anthropic models cannot reliably produce agent JSON output;
+    # fall back to direct call path for neuron-enriched non-Anthropic slots
+    anthropic_models = frozenset(("haiku", "sonnet", "opus"))
+    if agent_mode and model_name not in anthropic_models:
+        agent_mode = False
+
     start_time = time.monotonic()
 
     try:
-        if agent_mode and ctx and uses_neurons:
-            # Agent orchestration path
-            agent_exec = await _run_agent_pipeline(db, user_message, ctx, confidence_threshold, on_stage)
-            response_text = agent_exec.synthesis
-            input_tokens = agent_exec.coordinator_input_tokens
-            output_tokens = agent_exec.coordinator_output_tokens
-            cost_usd = agent_exec.total_cost_usd
-        elif uses_neurons and ctx:
-            # Direct call path with neurons
-            direct_result = await _run_direct_call(ctx, user_message, on_stage)
-            response_text = direct_result.get("text", "")
-            input_tokens = direct_result.get("input_tokens", 0)
-            output_tokens = direct_result.get("output_tokens", 0)
-            cost_usd = direct_result.get("cost_usd", 0.0)
-        else:
-            # Raw path: no neurons, just user message + model
-            # Use basic system prompt for raw baseline comparison
-            raw_system_prompt = """You are a knowledgeable expert assistant. Provide accurate, precise answers based on your training knowledge alone. Do not reference external documents or context."""
-            result = await llm_chat(
-                system_prompt=raw_system_prompt,
-                user_message=user_message,
-                max_tokens=4096,
-                model=model_name,
-            )
-            response_text = result.get("text", "")
-            input_tokens = result.get("input_tokens", 0)
-            output_tokens = result.get("output_tokens", 0)
-            cost_usd = result.get("cost_usd", 0)
+        result_data = await _execute_slot_llm(
+            db, user_message, ctx, model_name, uses_neurons,
+            agent_mode, confidence_threshold, on_stage,
+        )
 
         duration_ms = round((time.monotonic() - start_time) * 1000)
 
@@ -950,24 +949,26 @@ async def _execute_slot(
             "mode": mode,
             "model": model_name,
             "neurons": uses_neurons,
-            "response": response_text,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": cost_usd,
+            "response": result_data["response_text"],
+            "input_tokens": result_data["input_tokens"],
+            "output_tokens": result_data["output_tokens"],
+            "cost_usd": result_data["cost_usd"],
+            "cache_creation_tokens": result_data["cache_creation"],
+            "cache_read_tokens": result_data["cache_read"],
             "token_budget": token_budget,
             "top_k": ctx.neurons_activated if ctx else 0,
             "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
             "agent_mode": agent_mode,
+            "model_version": result_data.get("model_version"),
         }
 
-        # Emit per-slot completion event
         if on_stage:
             await on_stage("execute_llm", {"status": "done", "detail": {
                 "slot_index": slot_index,
                 "mode": mode,
                 "model": model_name,
                 "duration_ms": duration_ms,
-                "output_tokens": output_tokens,
+                "output_tokens": result_data["output_tokens"],
             }})
 
         return result
@@ -975,23 +976,6 @@ async def _execute_slot(
         duration_ms = round((time.monotonic() - start_time) * 1000)
         error_msg = str(e)[:200]
 
-        result = {
-            "mode": mode,
-            "model": model_name,
-            "neurons": uses_neurons,
-            "response": "",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cost_usd": 0.0,
-            "token_budget": token_budget,
-            "top_k": 0,
-            "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
-            "agent_mode": agent_mode,
-            "error": True,
-            "error_message": error_msg,
-        }
-
-        # Emit per-slot error event
         if on_stage:
             await on_stage("execute_llm", {"status": "error", "detail": {
                 "slot_index": slot_index,
@@ -999,7 +983,120 @@ async def _execute_slot(
                 "error": error_msg,
             }})
 
-        return result
+        return _build_error_slot_result(
+            mode, model_name, uses_neurons, token_budget,
+            label, agent_mode, error_msg,
+        )
+
+
+async def _execute_slot_llm(
+    db: AsyncSession,
+    user_message: str,
+    ctx: PreparedContext | None,
+    model_name: str,
+    uses_neurons: bool,
+    agent_mode: bool,
+    confidence_threshold: float,
+    on_stage: StageCallback,
+) -> dict:
+    """Run the LLM call for a single slot. Returns unified result dict.
+
+    Three paths: agent orchestration, direct neuron call, or raw baseline.
+    All paths return actual API-reported token counts (no estimates).
+    """
+    assert model_name, "model_name must be non-empty"
+    assert isinstance(uses_neurons, bool), "uses_neurons must be a bool"
+
+    if agent_mode and ctx and uses_neurons:
+        # Agent orchestration path — all agents + coordinator use slot's model
+        agent_exec = await _run_agent_pipeline(
+            db, user_message, ctx, confidence_threshold, on_stage, model=model_name,
+        )
+        # Aggregate actual tokens from all agent calls + coordinator
+        input_tokens = (
+            sum(r.input_tokens for r in agent_exec.agent_results)
+            + agent_exec.coordinator_input_tokens
+        )
+        output_tokens = (
+            sum(r.output_tokens for r in agent_exec.agent_results)
+            + agent_exec.coordinator_output_tokens
+        )
+        return {
+            "response_text": agent_exec.synthesis,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": agent_exec.total_cost_usd,
+            "cache_creation": 0,
+            "cache_read": 0,
+            "model_version": agent_exec.coordinator_model,
+        }
+
+    if uses_neurons and ctx:
+        # Direct call path with neurons — uses slot's model, real API tokens
+        direct_result = await _run_direct_call(ctx, user_message, on_stage, model=model_name)
+        return {
+            "response_text": direct_result.get("text", ""),
+            "input_tokens": direct_result.get("input_tokens", 0),
+            "output_tokens": direct_result.get("output_tokens", 0),
+            "cost_usd": direct_result.get("cost_usd", 0.0),
+            "cache_creation": direct_result.get("cache_creation_tokens", 0),
+            "cache_read": direct_result.get("cache_read_tokens", 0),
+            "model_version": direct_result.get("model_version"),
+        }
+
+    # Raw path: no neurons, just user message + model
+    raw_system_prompt = (
+        "You are a knowledgeable expert assistant. "
+        "Provide accurate, precise answers based on your training knowledge alone. "
+        "Do not reference external documents or context."
+    )
+    llm_result = await llm_chat(
+        system_prompt=raw_system_prompt,
+        user_message=user_message,
+        max_tokens=4096,
+        model=model_name,
+    )
+    return {
+        "response_text": llm_result.get("text", ""),
+        "input_tokens": llm_result.get("input_tokens", 0),
+        "output_tokens": llm_result.get("output_tokens", 0),
+        "cost_usd": llm_result.get("cost_usd", 0.0),
+        "cache_creation": llm_result.get("cache_creation_tokens", 0),
+        "cache_read": llm_result.get("cache_read_tokens", 0),
+        "model_version": llm_result.get("model_version"),
+    }
+
+
+def _build_error_slot_result(
+    mode: str,
+    model_name: str,
+    uses_neurons: bool,
+    token_budget: int,
+    label: str | None,
+    agent_mode: bool,
+    error_msg: str,
+) -> dict:
+    """Build error result dict for a failed slot execution."""
+    assert isinstance(mode, str), "mode must be a string"
+    assert isinstance(error_msg, str), "error_msg must be a string"
+
+    return {
+        "mode": mode,
+        "model": model_name,
+        "neurons": uses_neurons,
+        "response": "",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 0,
+        "token_budget": token_budget,
+        "top_k": 0,
+        "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
+        "agent_mode": agent_mode,
+        "error": True,
+        "error_message": error_msg,
+    }
 
 
 def _eval_slot_label(mode: str, uses_neurons: bool, token_budget: int) -> str:
@@ -1064,12 +1161,23 @@ async def execute_query(
     # Execute each slot in parallel
     slot_tasks = []
     for i, slot in enumerate(slots):
+        # Raw slots bypass neuron context; only neuron-enriched slots get it
+        # This ensures raw slots are vanilla Claude without any knowledge graph enrichment
+        mode = slot.get("mode", "haiku_neuron")
+        parts = mode.rsplit("_", 1)
+        slot_type = parts[1] if len(parts) > 1 else "neuron"
+        uses_neurons = slot_type == "neuron"
+
+        # Pass ctx only if this slot should receive neuron context
+        # (agent-path execution inside _execute_slot already guards on uses_neurons)
+        slot_ctx = ctx if uses_neurons else None
+
         task = _execute_slot(
             db=db,
             slot=slot,
             slot_index=i,
             user_message=user_message,
-            ctx=ctx,
+            ctx=slot_ctx,
             on_stage=on_stage,
         )
         slot_tasks.append(task)

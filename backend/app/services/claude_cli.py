@@ -57,15 +57,25 @@ CLAUDE_BIN = "/home/tylerbvogel/.config/nvm/versions/node/v20.20.0/bin/claude"
 
 
 def _build_cli_command(system_prompt: str, model: str | None) -> list[str]:
+    import tempfile
+    import uuid
+
     model_info = MODEL_REGISTRY.get(model or DEFAULT_MODEL)
     cli_model_arg = model_info.cli_arg if model_info else model
 
-    cmd = [CLAUDE_BIN, "-p", "--output-format", "json"]
+    cmd = [CLAUDE_BIN, "-p", "--output-format", "json", "--no-session-persistence"]
+
+    # Isolate each invocation with a unique session ID to prevent cache bleed in parallel execution
+    unique_session = str(uuid.uuid4())
+    cmd.extend(["--session-id", unique_session])
+
     if cli_model_arg:
         cmd.extend(["--model", cli_model_arg])
 
     # Use --system-prompt to override CLI's built-in system prompt
     # This prevents the CLI's default "software engineering assistant" framing
+    # Note: For very long prompts, the CLI may have command-line argument size limits.
+    # We pass it as a single argument here; subprocess.exec handles it safely without shell.
     if system_prompt:
         cmd.extend(["--system-prompt", system_prompt])
 
@@ -77,6 +87,7 @@ def _build_cli_command(system_prompt: str, model: str | None) -> list[str]:
 async def _run_cli_subprocess(cmd: list[str], prompt: str) -> tuple[bytes, bytes]:
     # Must unset CLAUDECODE to avoid nesting guard
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -115,13 +126,14 @@ def _parse_cli_response(stdout: bytes, model: str | None) -> dict:
     cache_create = usage.get("cache_creation_input_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
-    input_tokens = base_input + cache_create + cache_read
     model_version = data.get("model", None)
     cost_usd = estimate_cost_with_cache(model, base_input, cache_create, cache_read, output_tokens)
 
     result = {
         "text": text,
-        "input_tokens": input_tokens,
+        "input_tokens": base_input,
+        "cache_creation_tokens": cache_create,
+        "cache_read_tokens": cache_read,
         "output_tokens": output_tokens,
         "cost_usd": cost_usd,
         "model_version": model_version,

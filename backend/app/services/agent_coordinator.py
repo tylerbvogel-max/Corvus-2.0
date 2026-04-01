@@ -9,7 +9,7 @@ import asyncio
 import time
 from app.services.agent_dispatcher import AgentResult, AgentExecution, VerificationResult, _dispatch_verification_agent
 from app.services.agent_templates import build_coordinator_prompt
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat as claude_chat
 from app.config import settings
 
 
@@ -144,6 +144,7 @@ async def coordinate(
     intent: str,
     escalation_threshold: float = 0.7,
     on_stage: callable = None,
+    base_model: str = "haiku",
 ) -> AgentExecution:
     """Synthesize agent results. Single-domain uses agent findings directly; multi-domain coordinates."""
     assert agent_results, "agent_results must be non-empty"
@@ -157,7 +158,7 @@ async def coordinate(
         return AgentExecution(
             agent_results=agent_results,
             synthesis=result.findings,
-            coordinator_model="haiku",
+            coordinator_model=base_model,
             escalated_to_opus=False,
             domains_active=[result.domain_key],
             total_agents_dispatched=1,
@@ -169,7 +170,7 @@ async def coordinate(
 
     # Multi-domain: decide escalation
     should_escalate = _should_escalate_to_opus(agent_results, escalation_threshold)
-    coordinator_model = "opus" if should_escalate else "haiku"
+    coordinator_model = "opus" if should_escalate else base_model
 
     if on_stage:
         await on_stage("agent_coordination", {
@@ -198,7 +199,7 @@ State your overall confidence level."""
     )]
     if settings.agent_verification_enabled:
         tasks.append(asyncio.create_task(
-            _dispatch_verification_agent(agent_results, "", query, intent, model="haiku")
+            _dispatch_verification_agent(agent_results, "", query, intent, model=base_model)
         ))
 
     results = await asyncio.gather(*tasks)

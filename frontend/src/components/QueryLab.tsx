@@ -104,6 +104,17 @@ function slotsToChartModels(slots: SlotResult[], classifyCost: number, baseline:
 const DIMENSIONS = ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const;
 const DIM_LABELS: Record<string, string> = { accuracy: 'Accuracy', completeness: 'Completeness', clarity: 'Clarity', faithfulness: 'Faithfulness', overall: 'Overall' };
 
+// Enhanced SlotConfig type — now includes per-slot agent_mode and confidence_threshold
+interface EnhancedSlotConfig {
+  id: number;
+  mode: string;
+  tokenBudget: number;
+  maxOutputTokens: number;
+  agentMode: boolean;
+  confidenceThreshold: number;
+  color: string;
+}
+
 function scoreColor(val: number): string {
   if (val >= 5) return '#22c55e';
   if (val >= 4) return '#86efac';
@@ -149,7 +160,7 @@ function EvalScoreTable({ scores, winner, slots }: { scores: EvalScoreOut[]; win
               return (
                 <th key={s.answer_label} style={{ borderBottom: `2px solid ${getModeColor(s.answer_mode)}` }}>
                   {s.answer_label} — {displayLabel}
-                  {winner === s.answer_label && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: '#22c55e' }}>&#9733; Winner</span>}
+                  {winner === s.answer_label && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: '#22c55e', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.06em' }}>WINNER</span>}
                 </th>
               );
             })}
@@ -175,6 +186,296 @@ function EvalScoreTable({ scores, winner, slots }: { scores: EvalScoreOut[]; win
   );
 }
 
+
+// ────────── Model Card (new per-model configuration and result display) ──────────
+
+interface ModelCardProps {
+  slot: EnhancedSlotConfig;
+  slotResult: SlotResult | null;
+  isLoading: boolean;
+  onUpdate: (patch: Partial<EnhancedSlotConfig>) => void;
+  onRemove: () => void;
+  allModes: { key: string; label: string; short: string }[];
+  modeColors: Record<string, string>;
+}
+
+function ModelCard({
+  slot,
+  slotResult,
+  isLoading,
+  onUpdate,
+  onRemove,
+  allModes,
+  modeColors,
+}: ModelCardProps) {
+  const isRaw = slot.mode.endsWith('_raw');
+  const hasKG = !isRaw;
+
+  const mapBudgetToLabel = (budget: number): string => {
+    if (budget < 4000) return 'Focused';
+    if (budget < 12000) return 'Standard';
+    return 'Deep';
+  };
+
+  const mapOutputToLabel = (tokens: number): string => {
+    if (tokens < 2000) return 'Short';
+    if (tokens < 4096) return 'Medium';
+    return 'Long';
+  };
+
+  const reverseBudget = (label: string): number => {
+    if (label === 'Focused') return 2048;
+    if (label === 'Standard') return 8000;
+    return 24000;
+  };
+
+  const reverseOutput = (label: string): number => {
+    if (label === 'Short') return 1024;
+    if (label === 'Medium') return 4096;
+    return 8192;
+  };
+
+  return (
+    <div
+      className={`model-card${isRaw ? ' model-card-baseline' : ' model-card-enriched'}`}
+      style={{
+        borderColor: modeColors[slot.mode] ?? '#c8d0dc',
+        opacity: isLoading ? 0.8 : 1,
+        borderLeftWidth: isLoading ? 3 : 2,
+        borderLeftColor: isLoading ? `${modeColors[slot.mode] ?? '#c8d0dc'}88` : modeColors[slot.mode] ?? '#c8d0dc',
+        position: 'relative',
+      }}
+    >
+      {isLoading && (
+        <div className="card-loading-indicator">
+          <span className="card-spinner" />
+        </div>
+      )}
+
+      <div className="card-header">
+        <div className="card-model">
+          <select
+            value={slot.mode}
+            onChange={e => onUpdate({ mode: e.target.value })}
+            disabled={isLoading}
+            className="model-select"
+          >
+            {allModes.map(m => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="card-remove" onClick={onRemove} disabled={isLoading} title="Remove slot">
+          ✕
+        </button>
+      </div>
+
+      <div className="card-controls">
+        {/* Knowledge Graph toggle */}
+        <div className="control-group">
+          <label className="control-label">
+            <input
+              type="checkbox"
+              checked={hasKG}
+              disabled={true}
+              style={{ cursor: 'default' }}
+            />
+            <span>Knowledge Graph: {hasKG ? 'On' : 'Off'}</span>
+          </label>
+        </div>
+
+        {hasKG && (
+          <>
+            {/* Research Mode toggle */}
+            <div className="control-group">
+              <label className="control-label">
+                <input
+                  type="checkbox"
+                  checked={slot.agentMode}
+                  onChange={e => onUpdate({ agentMode: e.target.checked })}
+                  disabled={isLoading}
+                />
+                <span>Research Mode</span>
+              </label>
+            </div>
+
+            {/* Input Context slider */}
+            <div className="control-group">
+              <label className="control-label">Input Context</label>
+              <select
+                value={mapBudgetToLabel(slot.tokenBudget)}
+                onChange={e => onUpdate({ tokenBudget: reverseBudget(e.target.value) })}
+                disabled={isLoading}
+                className="control-select"
+              >
+                <option value="Focused">Focused (2K)</option>
+                <option value="Standard">Standard (8K)</option>
+                <option value="Deep">Deep (24K)</option>
+              </select>
+            </div>
+
+            {/* Confidence slider */}
+            <div className="control-group">
+              <label className="control-label">Confidence: {slot.confidenceThreshold.toFixed(2)}</label>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.05"
+                value={slot.confidenceThreshold}
+                onChange={e => onUpdate({ confidenceThreshold: parseFloat(e.target.value) })}
+                disabled={isLoading}
+                className="control-slider"
+              />
+            </div>
+          </>
+        )}
+
+        {/* Response Length slider (for all) */}
+        <div className="control-group">
+          <label className="control-label">Response Length</label>
+          <select
+            value={mapOutputToLabel(slot.maxOutputTokens)}
+            onChange={e => onUpdate({ maxOutputTokens: reverseOutput(e.target.value) })}
+            disabled={isLoading}
+            className="control-select"
+          >
+            <option value="Short">Short (1K)</option>
+            <option value="Medium">Medium (4K)</option>
+            <option value="Long">Long (8K)</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Response display after execution */}
+      {slotResult && !isLoading && (
+        <div className="card-response">
+          {slotResult.error ? (
+            <div className="response-error">{slotResult.response}</div>
+          ) : (
+            <>
+              <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slotResult.response ?? '', { async: false }) as string }} />
+              <div className="response-meta">
+                <span className="cost-badge">${slotResult.cost_usd.toFixed(4)}</span>
+                <span className="tokens-badge">{slotResult.input_tokens + slotResult.output_tokens} tokens</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────── Model Card Grid (horizontal scrollable grid of model cards) ──────────
+
+interface ModelCardGridProps {
+  slots: EnhancedSlotConfig[];
+  results: Record<number, SlotResult | null>;
+  loadingSlots: Set<number>;
+  onUpdateSlot: (slotId: number, patch: Partial<EnhancedSlotConfig>) => void;
+  onRemoveSlot: (slotId: number) => void;
+  onAddSlot: () => void;
+  allModes: { key: string; label: string; short: string }[];
+  modeColors: Record<string, string>;
+}
+
+function ModelCardGrid({
+  slots,
+  results,
+  loadingSlots,
+  onUpdateSlot,
+  onRemoveSlot,
+  onAddSlot,
+  allModes,
+  modeColors,
+}: ModelCardGridProps) {
+  return (
+    <div className="model-card-grid">
+      {slots.map(slot => (
+        <ModelCard
+          key={slot.id}
+          slot={slot}
+          slotResult={results[slot.id] ?? null}
+          isLoading={loadingSlots.has(slot.id)}
+          onUpdate={patch => onUpdateSlot(slot.id, patch)}
+          onRemove={() => onRemoveSlot(slot.id)}
+          allModes={allModes}
+          modeColors={modeColors}
+        />
+      ))}
+
+      {/* Add Slot placeholder card */}
+      {slots.length < 8 && (
+        <div className="model-card model-card-add-slot" onClick={onAddSlot}>
+          <div className="add-slot-content">
+            <div className="add-slot-icon">+</div>
+            <div className="add-slot-label">Add Slot</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ────────── Graph Health Panel (new left panel tab) ──────────
+
+interface GraphHealthPanelProps {
+  graphCapacity: GraphCapacity | null;
+  history: QuerySummary[];
+}
+
+function GraphHealthPanel({
+  graphCapacity,
+  history,
+}: GraphHealthPanelProps) {
+  const [stats, setStats] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [capacityRes] = await Promise.all([
+          fetch('/api/neurons/capacity').then(r => r.json()),
+        ]);
+        setStats(capacityRes);
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  if (loading) {
+    return <div className="graph-health-panel">Loading...</div>;
+  }
+
+  const neuronCount = stats?.active_neurons ?? graphCapacity?.active_neurons ?? 0;
+  const totalTokens = stats?.total_tokens ?? graphCapacity?.total_tokens ?? 0;
+
+  return (
+    <div className="graph-health-panel">
+      <div className="health-stat">
+        <div className="stat-label">Active Neurons</div>
+        <div className="stat-value">{neuronCount.toLocaleString()}</div>
+      </div>
+      <div className="health-stat">
+        <div className="stat-label">Queries Run</div>
+        <div className="stat-value">{history.length}</div>
+      </div>
+      <div className="health-stat">
+        <div className="stat-label">Total Tokens</div>
+        <div className="stat-value">{(totalTokens / 1000).toFixed(0)}K</div>
+      </div>
+    </div>
+  );
+}
+
 type RefinePhase = 'idle' | 'ready' | 'loading' | 'has-suggestions' | 'applying' | 'applied';
 
 function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, initialRefineResult, onNavigateToNeuron }: {
@@ -184,7 +485,7 @@ function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, 
   onNavigateToNeuron?: (id: number) => void;
 }) {
   const { models: availableModels } = useModels();
-  const [refineModel, setRefineModel] = useState<string>('haiku');
+  const [refineModel, setRefineModel] = useState<string>('opus');
   const [refineMaxTokens, setRefineMaxTokens] = useState(4096);
   const [refineLoading, setRefineLoading] = useState(false);
   const [refineResult, setRefineResult] = useState<RefineResponse | null>(null);
@@ -318,6 +619,11 @@ function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, 
           <div className="refine-reasoning">
             <div className="eval-model-tag">Analysis by {refineResult.model}</div>
             <div className="response-text" style={{ marginBottom: 12 }}>{refineResult.reasoning}</div>
+            {refineResult.neuron_vs_raw_verdict && (
+              <div className="response-text" style={{ marginBottom: 12, padding: 8, backgroundColor: 'var(--bg-secondary)', borderRadius: 4, borderLeft: '3px solid var(--accent)' }}>
+                <strong>Neuron vs Raw Analysis:</strong><br />{refineResult.neuron_vs_raw_verdict}
+              </div>
+            )}
             <div className="token-breakdown">
               <div className="breakdown-item"><div className="bd-value">{refineResult.input_tokens}</div><div className="bd-label">In</div></div>
               <div className="breakdown-item"><div className="bd-value">{refineResult.output_tokens}</div><div className="bd-label">Out</div></div>
@@ -398,27 +704,9 @@ function RefinePanel({ queryId, hasEval, hasNeurons, onRunAgain, onPhaseChange, 
   );
 }
 
-// ────────── Unified Slot Builder ──────────
-
-interface SlotConfig {
-  id: number;
-  mode: string;
-  tokenBudget: number;
-  topK: number;
-  maxOutputTokens: number;
-  color: string;
-}
+// ────────── Slot Coloring ──────────
 
 let nextSlotId = 1;
-
-const TOKEN_MIN = 1000;
-const TOKEN_MAX = 32000;
-const TOPK_MIN = 1;
-const TOPK_MAX = 500;
-const OUTPUT_MIN = 512;
-const OUTPUT_MAX = 8192;
-const OUTPUT_Y_PCT = 90;
-const PLOT_ASPECT = 2;
 
 const SLOT_PALETTE = [
   '#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa',
@@ -432,328 +720,6 @@ function nextSlotColor(): string {
   return c;
 }
 
-function UnifiedPlot({ slots, maxNeurons, selectedId, onSelect, onUpdateSlot }: {
-  slots: SlotConfig[];
-  maxNeurons: number;
-  selectedId: number | null;
-  onSelect: (id: number | null) => void;
-  onUpdateSlot: (id: number, patch: Partial<SlotConfig>) => void;
-}) {
-  const plotRef = useRef<HTMLDivElement>(null);
-  const dragTarget = useRef<{ type: 'input' | 'output'; modelId: number } | null>(null);
-  const neuronSlots = slots.filter(s => !s.mode.endsWith('_raw'));
-
-  const effectiveTopKMax = Math.min(maxNeurons, TOPK_MAX);
-
-  const yPctFromVal = useCallback((v: number) => {
-    return (1 - (v - TOPK_MIN) / (effectiveTopKMax - TOPK_MIN)) * 100;
-  }, [effectiveTopKMax]);
-
-  const yValFromPct = useCallback((yPct: number) => {
-    return Math.round(TOPK_MIN + (1 - yPct) * (effectiveTopKMax - TOPK_MIN));
-  }, [effectiveTopKMax]);
-
-  const xPctFromVal = useCallback((v: number) => {
-    return ((v - TOKEN_MIN) / (TOKEN_MAX - TOKEN_MIN)) * 100;
-  }, []);
-
-  const xValFromPct = useCallback((xPct: number) => {
-    return Math.round((TOKEN_MIN + xPct * (TOKEN_MAX - TOKEN_MIN)) / 1000) * 1000;
-  }, []);
-
-  const outputFromXPct = useCallback((xPct: number) => {
-    const raw = TOKEN_MIN + xPct * (TOKEN_MAX - TOKEN_MIN);
-    return Math.max(OUTPUT_MIN, Math.min(OUTPUT_MAX, Math.round(raw / 256) * 256));
-  }, []);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragTarget.current) return;
-    const rect = plotRef.current!.getBoundingClientRect();
-    const yPct = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-    const xPct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const target = dragTarget.current;
-
-    if (target.type === 'input') {
-      const newTopK = Math.max(TOPK_MIN, Math.min(effectiveTopKMax, yValFromPct(yPct)));
-      const newBudget = Math.max(TOKEN_MIN, Math.min(TOKEN_MAX, xValFromPct(xPct)));
-      onUpdateSlot(target.modelId, { tokenBudget: newBudget, topK: newTopK });
-    } else if (target.type === 'output') {
-      const newOutput = outputFromXPct(xPct);
-      onUpdateSlot(target.modelId, { maxOutputTokens: newOutput });
-    }
-  }, [effectiveTopKMax, yValFromPct, xValFromPct, outputFromXPct, onUpdateSlot]);
-
-  // Find which slot a click is nearest to (for select or drag)
-  const findNearest = useCallback((xPct: number, yPct: number) => {
-    const GRAB_THRESH = 0.12;
-    let closestDist = Infinity;
-    let closestTarget: { type: 'input' | 'output'; modelId: number } | null = null;
-
-    for (const s of neuronSlots) {
-      const inputXPct = xPctFromVal(s.tokenBudget) / 100;
-      const inputYPct = yPctFromVal(s.topK) / 100;
-      const outputXPct = xPctFromVal(s.maxOutputTokens) / 100;
-      const outputYPct = OUTPUT_Y_PCT / 100;
-
-      const distToInput = Math.sqrt((xPct - inputXPct) ** 2 + (yPct - inputYPct) ** 2);
-      const distToOutput = Math.sqrt((xPct - outputXPct) ** 2 + (yPct - outputYPct) ** 2);
-
-      if (distToInput < closestDist && distToInput < GRAB_THRESH) {
-        closestDist = distToInput;
-        closestTarget = { type: 'input', modelId: s.id };
-      }
-      if (distToOutput < closestDist && distToOutput < GRAB_THRESH) {
-        closestDist = distToOutput;
-        closestTarget = { type: 'output', modelId: s.id };
-      }
-    }
-    return closestTarget;
-  }, [neuronSlots, yPctFromVal, xPctFromVal]);
-
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    const rect = plotRef.current!.getBoundingClientRect();
-    const xPct = (e.clientX - rect.left) / rect.width;
-    const yPct = (e.clientY - rect.top) / rect.height;
-    const nearest = findNearest(xPct, yPct);
-
-    if (!nearest) {
-      // Clicked empty space — deselect
-      onSelect(null);
-      return;
-    }
-
-    if (selectedId === nearest.modelId) {
-      // Already selected — start dragging
-      dragTarget.current = nearest;
-      plotRef.current!.setPointerCapture(e.pointerId);
-      handlePointerMove(e);
-    } else {
-      // Select this line
-      onSelect(nearest.modelId);
-    }
-  }, [findNearest, selectedId, onSelect, handlePointerMove]);
-
-  const onPointerUp = useCallback(() => {
-    dragTarget.current = null;
-  }, []);
-
-  const xTicks = [1, 4, 8, 16, 32];
-  const yTicks = [1, 10, 30, 50, 100, 250, 500].filter(v => v <= effectiveTopKMax);
-  const hasSelection = selectedId != null;
-
-  return (
-    <div className="xy-plot-container">
-      <div className="xy-plot-ylabel">Top-K</div>
-      <div className="xy-plot-inner">
-        <div className="xy-plot-yticks">
-          {yTicks.map(v => {
-            const top = yPctFromVal(v);
-            return <span key={v} className="xy-tick-y" style={{ top: `${top}%` }}>{v}</span>;
-          })}
-        </div>
-        <div
-          ref={plotRef}
-          className="xy-plot-area"
-          style={{ aspectRatio: String(PLOT_ASPECT) }}
-          onPointerDown={onPointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={onPointerUp}
-        >
-          {/* Grid lines */}
-          {xTicks.map(v => {
-            const left = xPctFromVal(v * 1000);
-            return <div key={v} className="xy-gridline-v" style={{ left: `${left}%` }} />;
-          })}
-          {yTicks.map(v => {
-            const top = yPctFromVal(v);
-            return <div key={v} className="xy-gridline-h" style={{ top: `${top}%` }} />;
-          })}
-
-          {/* SVG lines */}
-          <svg
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-          >
-            {neuronSlots.map(s => {
-              const x1 = xPctFromVal(s.tokenBudget);
-              const y1 = yPctFromVal(s.topK);
-              const x2 = xPctFromVal(s.maxOutputTokens);
-              const y2 = OUTPUT_Y_PCT;
-              const isSelected = selectedId === s.id;
-              const faded = hasSelection && !isSelected;
-              return (
-                <line key={s.id} x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={s.color}
-                  strokeWidth={isSelected ? '1.2' : '0.6'}
-                  strokeLinecap="round"
-                  opacity={faded ? 0.2 : 1}
-                />
-              );
-            })}
-          </svg>
-
-          {/* HTML dots and labels (neuron slots only) */}
-          {neuronSlots.map(s => {
-            const isSelected = selectedId === s.id;
-            const faded = hasSelection && !isSelected;
-            const outputXPct = xPctFromVal(s.maxOutputTokens);
-            const inputXPct = xPctFromVal(s.tokenBudget);
-            const inputYPct = yPctFromVal(s.topK);
-            const dx = outputXPct - inputXPct;
-            const dy = (OUTPUT_Y_PCT - inputYPct) / PLOT_ASPECT;
-            let angleDeg = Math.atan2(dy, dx) * (180 / Math.PI);
-            if (angleDeg > 90) angleDeg -= 180;
-            if (angleDeg < -90) angleDeg += 180;
-            const midXPct = (inputXPct + outputXPct) / 2;
-            const midYPct = (inputYPct + OUTPUT_Y_PCT) / 2;
-            const opacity = faded ? 0.2 : 1;
-
-            return (
-              <div key={s.id} style={{ opacity }}>
-                <div className="uplot-dot" style={{
-                  left: `${inputXPct}%`, top: `${inputYPct}%`,
-                  background: s.color, borderColor: s.color,
-                  width: isSelected ? 14 : 12, height: isSelected ? 14 : 12,
-                  boxShadow: isSelected ? `0 0 10px ${s.color}` : undefined,
-                }} />
-                <div className="uplot-dot uplot-dot-sm" style={{
-                  left: `${outputXPct}%`, top: `${OUTPUT_Y_PCT}%`,
-                  background: s.color, borderColor: '#fff',
-                  boxShadow: isSelected ? `0 0 10px ${s.color}` : undefined,
-                }} />
-                <div className="uplot-label" style={{
-                  left: `${midXPct}%`, top: `${midYPct}%`,
-                  color: s.color,
-                  transform: `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-10px)`,
-                }}>
-                  {getModeLabel(s.mode)}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Output Y level indicator */}
-          <div className="xy-crosshair-h" style={{ top: `${OUTPUT_Y_PCT}%`, opacity: 0.15, borderTop: '1px dashed var(--text-dim)' }} />
-          <div className="unified-output-label" style={{ top: `${OUTPUT_Y_PCT}%` }}>Output</div>
-
-          {/* Readout */}
-          <div className="xy-readout">
-            {neuronSlots.map(s => <span key={s.id} style={{ color: s.color, opacity: hasSelection && selectedId !== s.id ? 0.3 : 1 }}>K={s.topK} </span>)}
-          </div>
-        </div>
-        <div className="xy-plot-xticks">
-          {xTicks.map(v => {
-            const left = xPctFromVal(v * 1000);
-            return <span key={v} className="xy-tick-x" style={{ left: `${left}%` }}>{v}K</span>;
-          })}
-        </div>
-      </div>
-      <div className="xy-plot-xlabel">Tokens (Input Budget &amp; Max Output)</div>
-    </div>
-  );
-}
-
-function SlotBuilder({ slots, onChange, capacity, groupedModels }: {
-  slots: SlotConfig[];
-  onChange: (slots: SlotConfig[]) => void;
-  capacity: GraphCapacity | null;
-  groupedModels: Record<string, ModelOption[]>;
-}) {
-  const [selectedSlotId, setSelectedSlotId] = useState<number | null>(null);
-  const neuronSlots = slots.filter(s => !s.mode.endsWith('_raw'));
-  const rawSlots = slots.filter(s => s.mode.endsWith('_raw'));
-
-  function addSlot(mode: string) {
-    onChange([...slots, { id: nextSlotId++, mode, tokenBudget: 8000, topK: 60, maxOutputTokens: 4096, color: nextSlotColor() }]);
-  }
-
-  function removeSlot(id: number) {
-    if (selectedSlotId === id) setSelectedSlotId(null);
-    onChange(slots.filter(s => s.id !== id));
-  }
-
-  function updateSlot(id: number, patch: Partial<SlotConfig>) {
-    onChange(slots.map(s => s.id === id ? { ...s, ...patch } : s));
-  }
-
-  const maxNeurons = capacity?.active_neurons ?? 500;
-  const hasSelection = selectedSlotId != null;
-
-  return (
-    <div className="slot-builder">
-      {/* Auto-add dropdown */}
-      <div className="unified-controls">
-        <select
-          className="qlt-mode-select"
-          value=""
-          onChange={e => { if (e.target.value) addSlot(e.target.value); }}
-        >
-          <option value="" disabled>Add model...</option>
-          {Object.entries(groupedModels).map(([group, models]) => ([
-            <option key={`hdr-${group}`} disabled>── {group} ──</option>,
-            ...models.flatMap(m => [
-              <option key={`${m.display_name}_neuron`} value={`${m.display_name}_neuron`}>{m.display_name} + Neurons</option>,
-              <option key={`${m.display_name}_raw`} value={`${m.display_name}_raw`}>{m.display_name} Raw</option>,
-            ]),
-          ]))}
-        </select>
-      </div>
-
-      {/* Model legend pills — click to select */}
-      <div className="model-legend">
-        {slots.map(s => {
-          const isRaw = s.mode.endsWith('_raw');
-          const isSelected = selectedSlotId === s.id;
-          const faded = hasSelection && !isSelected;
-          return (
-            <span
-              key={s.id}
-              className={`model-pill${isSelected ? ' model-pill-selected' : ''}`}
-              style={{ borderColor: s.color, color: s.color, opacity: faded ? 0.4 : 1, cursor: 'pointer' }}
-              onClick={() => setSelectedSlotId(isSelected ? null : s.id)}
-            >
-              <span className="model-pill-dot" style={{ background: s.color }} />
-              {getModeLabel(s.mode)}
-              <span className="model-pill-detail">
-                {isRaw ? `Out=${s.maxOutputTokens}` : `K=${s.topK} In=${Math.round(s.tokenBudget / 1000)}K Out=${s.maxOutputTokens}`}
-              </span>
-              <button className="model-pill-remove" onClick={e => { e.stopPropagation(); removeSlot(s.id); }} disabled={slots.length <= 1} title="Remove">&times;</button>
-            </span>
-          );
-        })}
-      </div>
-
-      {capacity && (
-        <div className="graph-capacity-bar">
-          <span className="capacity-label">Graph:</span>
-          <span className="capacity-value">{capacity.active_neurons.toLocaleString()} neurons</span>
-          <span className="capacity-sep">&middot;</span>
-          <span className="capacity-value">{capacity.total_content_tokens.toLocaleString()} content tokens</span>
-          <span className="capacity-sep">&middot;</span>
-          <span className="capacity-value">{capacity.total_tokens.toLocaleString()} total</span>
-        </div>
-      )}
-
-      {/* Graph + raw models side by side */}
-      <div className="unified-graph-row">
-        <UnifiedPlot slots={neuronSlots} maxNeurons={maxNeurons} selectedId={selectedSlotId} onSelect={setSelectedSlotId} onUpdateSlot={updateSlot} />
-        {rawSlots.length > 0 && (
-          <div className="raw-models-column">
-            <div className="raw-models-header">Raw</div>
-            {rawSlots.map(s => (
-              <div key={s.id} className="raw-model-chip" style={{ borderColor: s.color, color: s.color }}>
-                <span className="model-pill-dot" style={{ background: s.color }} />
-                {getModeLabel(s.mode)}
-                <button className="model-pill-remove" onClick={() => removeSlot(s.id)} title="Remove">&times;</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ────────── Main Component ──────────
 
@@ -769,20 +735,24 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const elapsedRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const { models: availableModels, grouped: groupedModels } = useModels();
+  const { models: availableModels } = useModels();
   const ALL_MODES = useMemo(() => buildAllModes(availableModels), [availableModels]);
   const MODE_COLORS = useMemo(() => buildModeColors(availableModels), [availableModels]);
 
 
-  const [slotConfigs, setSlotConfigs] = useState<SlotConfig[]>([
-    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, topK: 60, maxOutputTokens: 4096, color: nextSlotColor() },
+  // New enhanced slot config (with per-slot agent_mode and confidence_threshold)
+  const [slotConfigs, setSlotConfigs] = useState<EnhancedSlotConfig[]>([
+    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, maxOutputTokens: 4096, agentMode: true, confidenceThreshold: 0.5, color: nextSlotColor() },
   ]);
+  // For backward compatibility: keep a mapping of slot results by ID
+  const [slotResults, setSlotResults] = useState<Record<number, SlotResult | null>>({});
+
   const [graphCapacity, setGraphCapacity] = useState<GraphCapacity | null>(null);
   // Track which slot indices are still loading (for per-slot spinners)
   const [slotLoadingSet, setSlotLoadingSet] = useState<Set<number>>(new Set());
 
   const [evalLoading, setEvalLoading] = useState(false);
-  const [evalModel, setEvalModel] = useState<string>('haiku');
+  const [evalModel, setEvalModel] = useState<string>('sonnet');
   const [evalText, setEvalText] = useState<string | null>(null);
   const [evalMdl, setEvalMdl] = useState<string | null>(null);
   const [evalIn, setEvalIn] = useState(0);
@@ -796,14 +766,13 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [view, setView] = useState<'new' | 'history'>('new');
 
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [leftPanelTab, setLeftPanelTab] = useState<'history' | 'health'>('history');
   const [refinePhase, setRefinePhase] = useState<RefinePhase>('idle');
   const [liveRefineRestore, setLiveRefineRestore] = useState<RefineResponse | null>(null);
   const [stageStatuses, setStageStatuses] = useState<Record<string, StageEvent>>({});
   const [stageTimes, setStageTimes] = useState<Record<string, number>>({});
   const stageTimestamps = useRef<Record<string, number>>({});
   const [configCollapsed, setConfigCollapsed] = useState(false);
-  const [agentMode, setAgentMode] = useState(true);
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
   const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -829,10 +798,10 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
     return slotConfigs.map(sc => ({
       mode: sc.mode,
       token_budget: sc.tokenBudget,
-      top_k: sc.topK,
+      top_k: 60, // Keep as internal default; hidden from users per plan
       max_output_tokens: sc.maxOutputTokens,
-      agent_mode: agentMode,
-      confidence_threshold: confidenceThreshold,
+      agent_mode: sc.agentMode,
+      confidence_threshold: sc.confidenceThreshold,
     }));
   }
 
@@ -878,7 +847,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
     };
     setHistory(prev => [pendingEntry, ...prev]);
     try {
-      const { promise, abort } = submitQueryStream(message, agentMode, confidenceThreshold, (event) => {
+      const { promise, abort } = submitQueryStream(message, true, 0.5, (event) => {
         setStageStatuses(prev => ({ ...prev, [event.stage]: event }));
 
         // Track per-slot completion: remove slot from loading set when it finishes
@@ -912,6 +881,28 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
         setStageTimes(prev => ({ ...prev, [lastKey]: finishTime - stageTimestamps.current[lastKey] }));
       }
       setResult(res);
+      // Map SlotResults to slot IDs
+      const slotResultMap: Record<number, SlotResult | null> = {};
+      slotConfigs.forEach((sc, idx) => {
+        slotResultMap[sc.id] = res.slots[idx] ?? null;
+      });
+      setSlotResults(slotResultMap);
+      // Auto-trigger eval if multi-slot
+      if (res.slots.length >= 2) {
+        setTimeout(() => {
+          evaluateQuery(res.query_id, evalModel)
+            .then(res => {
+              setEvalText(res.eval_text);
+              setEvalMdl(res.eval_model);
+              setEvalIn(res.eval_input_tokens);
+              setEvalOut(res.eval_output_tokens);
+              setEvalScores(res.scores ?? []);
+              setEvalWinner(res.winner ?? null);
+              setEvalLearning(res.learning ?? null);
+            })
+            .catch(() => {});
+        }, 500);
+      }
       loadHistory();
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
@@ -990,6 +981,29 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
     }
   }
 
+  // Slot management functions
+  function addSlot(mode: string) {
+    setSlotConfigs(prev => [...prev, {
+      id: nextSlotId++,
+      mode,
+      tokenBudget: 8000,
+      maxOutputTokens: 4096,
+      agentMode: true,
+      confidenceThreshold: 0.5,
+      color: nextSlotColor(),
+    }]);
+  }
+
+  function removeSlot(slotId: number) {
+    if (slotConfigs.length <= 1) return; // Always keep at least one slot
+    setSlotConfigs(prev => prev.filter(s => s.id !== slotId));
+    setSlotResults(prev => { const next = { ...prev }; delete next[slotId]; return next; });
+  }
+
+  function updateSlot(slotId: number, patch: Partial<EnhancedSlotConfig>) {
+    setSlotConfigs(prev => prev.map(s => s.id === slotId ? { ...s, ...patch } : s));
+  }
+
   async function selectHistoryItem(id: number) {
     try {
       const detail = await fetchQueryDetail(id);
@@ -1009,9 +1023,20 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
         <h3 style={{ display: 'flex', alignItems: 'flex-end', gap: 6, paddingBottom: 6 }}>
           <span onClick={() => setHistoryCollapsed(c => !c)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
             <span className="sidebar-toggle" style={{ padding: 2 }}>{historyCollapsed ? '\u25B6' : '\u25C0'}</span>
-            {!historyCollapsed ? 'Query History' : ''}
+            {!historyCollapsed && (
+              <div className="panel-tabs">
+                <button
+                  className={`panel-tab${leftPanelTab === 'history' ? ' active' : ''}`}
+                  onClick={() => setLeftPanelTab('history')}
+                >History</button>
+                <button
+                  className={`panel-tab${leftPanelTab === 'health' ? ' active' : ''}`}
+                  onClick={() => setLeftPanelTab('health')}
+                >Graph Health</button>
+              </div>
+            )}
           </span>
-          {!historyCollapsed && (
+          {!historyCollapsed && leftPanelTab === 'history' && (
             <button
               className="btn btn-sm"
               title="New query"
@@ -1020,7 +1045,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             >+</button>
           )}
         </h3>
-        {!historyCollapsed && (
+        {!historyCollapsed && leftPanelTab === 'history' && (
           <>
             {history.length === 0 && <div className="history-empty">No queries yet</div>}
             {history.map(q => {
@@ -1052,6 +1077,9 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             })}
           </>
         )}
+        {!historyCollapsed && leftPanelTab === 'health' && (
+          <GraphHealthPanel graphCapacity={graphCapacity} history={history} />
+        )}
       </div>
 
       <div className="query-main">
@@ -1068,33 +1096,25 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
               <span>{configCollapsed ? 'Show model config' : 'Model config'}</span>
             </div>
             <div className="config-collapsible">
-              <SlotBuilder slots={slotConfigs} onChange={setSlotConfigs} capacity={graphCapacity} groupedModels={groupedModels} />
-              <div className="query-controls-bottom">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                    <input
-                      type="checkbox"
-                      checked={agentMode}
-                      onChange={(e) => setAgentMode(e.target.checked)}
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <span>Agent Orchestration</span>
-                  </label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                    <label style={{ whiteSpace: 'nowrap', fontSize: '0.9rem', color: 'var(--text-dim)' }}>
-                      Confidence θ: {confidenceThreshold.toFixed(2)}
-                    </label>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="1.0"
-                      step="0.05"
-                      value={confidenceThreshold}
-                      onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
-                      style={{ flex: 1, minWidth: '100px', cursor: 'pointer' }}
-                    />
-                  </div>
+              <ModelCardGrid
+                slots={slotConfigs}
+                results={slotResults}
+                loadingSlots={slotLoadingSet}
+                onUpdateSlot={updateSlot}
+                onRemoveSlot={removeSlot}
+                onAddSlot={() => addSlot('haiku_neuron')}
+                allModes={ALL_MODES}
+                modeColors={MODE_COLORS}
+              />
+              {graphCapacity && (
+                <div className="graph-capacity-bar">
+                  <span className="capacity-label">Graph:</span>
+                  <span className="capacity-value">{graphCapacity.active_neurons.toLocaleString()} neurons</span>
+                  <span className="capacity-sep">&middot;</span>
+                  <span className="capacity-value">{graphCapacity.total_content_tokens.toLocaleString()} content tokens</span>
                 </div>
+              )}
+              <div className="query-controls-bottom">
                 <button className="btn" onClick={handleSubmit} disabled={loading || !message.trim()}>
                   {loading ? 'Processing...' : 'Submit'}
                 </button>
@@ -1105,75 +1125,32 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
         {error && <div className="error-msg">{error}</div>}
 
-        {/* Live pipeline with animated gutter dots during execution */}
-        {loading && (
-          <div className="live-pipeline-wrapper" style={{ marginBottom: '24px' }}>
-            <div style={{ position: 'absolute', top: '20px', right: '20px', fontFamily: 'JetBrains Mono', fontSize: '1.2rem', fontWeight: 700, color: 'var(--accent)' }}>
-              {(elapsedMs / 1000).toFixed(1)}s
-            </div>
-
-            {/* Pipeline stages with animated dots */}
-            {[
-              { key: 'input_guard', label: 'Input Guard' },
-              { key: 'embed_query', label: 'Embed Query' },
-              { key: 'classify', label: 'Classify' },
-              { key: 'semantic_prefilter', label: 'Semantic Filter' },
-              { key: 'score_neurons', label: 'Score Neurons' },
-              { key: 'spread_activation', label: 'Spread Activation' },
-              { key: 'assemble_prompt', label: 'Assemble Prompt' },
-              { key: 'execute_llm', label: 'Execute LLM' },
-              { key: 'output_checks', label: 'Output Checks' },
-            ].map((stage) => {
-              const isComplete = stage.key in stageStatuses;
-              const isExecuteLLM = stage.key === 'execute_llm';
-              const stepStatus = isComplete ? 'done' : 'pending';
-
-              return (
-                <PStep key={stage.key} status={stepStatus}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div className="pipeline-step-label">{stage.label}</div>
-
-                    {/* Per-slot badges within execute_llm stage */}
-                    {isExecuteLLM && isComplete && (
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        {slotConfigs.map((sc, i) => {
-                          const slotDone = !slotLoadingSet.has(i);
-                          const modeInfo = ALL_MODES.find(m => m.key === sc.mode);
-                          const modeLabel = modeInfo?.short ?? sc.mode.slice(0, 3).toUpperCase();
-                          return (
-                            <span key={sc.id} style={{
-                              fontSize: '0.7rem',
-                              padding: '3px 8px',
-                              background: slotDone ? 'rgba(34, 197, 94, 0.15)' : 'rgba(200, 117, 51, 0.15)',
-                              color: slotDone ? '#22c55e' : 'var(--accent)',
-                              borderRadius: '3px',
-                              border: `1px solid ${slotDone ? 'rgba(34, 197, 94, 0.3)' : 'rgba(200, 117, 51, 0.3)'}`,
-                              fontWeight: 600,
-                            }}>
-                              {slotDone ? '✓' : '⟳'} {modeLabel}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </PStep>
-              );
-            })}
-          </div>
-        )}
-
-        {result && view === 'new' && (
+        {(loading || result) && view === 'new' && (
           <LiveResult
             result={result}
+            loading={loading}
+            message={message}
+            stageStatuses={stageStatuses}
+            slotLoadingSet={slotLoadingSet}
+            slotConfigs={slotConfigs}
             totalElapsedMs={elapsedMs}
-            rating={rating} setRating={setRating} rated={rated} onRate={handleRate}
-            evalText={evalText} evalMdl={evalMdl} evalIn={evalIn} evalOut={evalOut}
-            evalScores={evalScores} evalWinner={evalWinner}
+            rating={rating}
+            setRating={setRating}
+            rated={rated}
+            onRate={handleRate}
+            evalText={evalText}
+            evalMdl={evalMdl}
+            evalIn={evalIn}
+            evalOut={evalOut}
+            evalScores={evalScores}
+            evalWinner={evalWinner}
             evalLearning={evalLearning}
-            evalModel={evalModel} setEvalModel={setEvalModel}
-            evalLoading={evalLoading} onEval={handleEval}
-            onRunAgain={handleRunAgain} onRefinePhaseChange={setRefinePhase}
+            evalModel={evalModel}
+            setEvalModel={setEvalModel}
+            evalLoading={evalLoading}
+            onEval={handleEval}
+            onRunAgain={handleRunAgain}
+            onRefinePhaseChange={setRefinePhase}
             initialRefineResult={liveRefineRestore}
             onNavigateToNeuron={onNavigateToNeuron}
             stageTimes={stageTimes}
@@ -1274,8 +1251,10 @@ function PipelineConnectors({ containerRef }: { containerRef: React.RefObject<HT
 
 // ────────── Live Result ──────────
 
-function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
-  result: QueryResponse; baseline?: string; totalElapsedMs?: number;
+function LiveResult({ result, loading, message, stageStatuses, slotLoadingSet, slotConfigs, baseline = 'opus_raw', totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
+  result: QueryResponse | null; loading: boolean; message: string;
+  stageStatuses: Record<string, StageEvent>; slotLoadingSet: Set<number>; slotConfigs: EnhancedSlotConfig[];
+  baseline?: string; totalElapsedMs?: number;
   rating: number; setRating: (v: number) => void; rated: boolean; onRate: () => void;
   evalText: string | null; evalMdl: string | null; evalIn: number; evalOut: number;
   evalScores: EvalScoreOut[]; evalWinner: string | null;
@@ -1287,12 +1266,18 @@ function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, set
   onNavigateToNeuron?: (id: number) => void;
   stageTimes?: Record<string, number>;
 }) {
-  const hasNeurons = result.neuron_scores.length > 0;
+  const hasNeurons = (result?.neuron_scores.length ?? 0) > 0;
   const { models: availableModels } = useModels();
   const pipelineRef = useRef<HTMLDivElement>(null);
 
-  const guardVerdict = result.input_guard?.verdict;
-  const guardPass = !result.input_guard || result.input_guard.flag_count === 0;
+  const guardVerdict = result?.input_guard?.verdict;
+  const guardPass = !result?.input_guard || result.input_guard.flag_count === 0;
+
+  function stepStatus(stageKey: string): 'done' | 'active' | 'pending' {
+    if (stageKey in stageStatuses) return 'done';
+    if (loading) return 'pending';
+    return result ? 'done' : 'pending';
+  }
 
   function stageTime(key: string): string | undefined {
     const ms = stageTimes?.[key];
@@ -1304,9 +1289,17 @@ function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, set
   return (
     <div className="pipeline-flow" ref={pipelineRef} style={{ position: 'relative' }}>
       <PipelineConnectors containerRef={pipelineRef} />
-      <PStep status={guardPass ? 'done' : 'done'}>
-        <div className="pipeline-step-label">Input Guard <span className="step-timing">{guardPass ? 'pass' : guardVerdict?.toUpperCase()}{stageTime('input_guard') && ` · ${stageTime('input_guard')}`}</span></div>
-        {result.input_guard && result.input_guard.flag_count > 0 && (
+
+      {/* Step 1: PROMPT */}
+      <PStep status="done">
+        <div className="pipeline-step-label">Prompt</div>
+        <div className="pipeline-prompt-text">{message}</div>
+      </PStep>
+
+      {/* Step 2: INPUT GUARD */}
+      <PStep status={stepStatus('input_guard')}>
+        <div className="pipeline-step-label">Input Guard {'input_guard' in stageStatuses && result && <span className="step-timing">{guardPass ? 'pass' : guardVerdict?.toUpperCase()}{stageTime('input_guard') && ` · ${stageTime('input_guard')}`}</span>}</div>
+        {'input_guard' in stageStatuses && result?.input_guard && result.input_guard.flag_count > 0 && (
           <div style={{ padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem', background: guardVerdict === 'warn' ? '#fb923c18' : '#ef444418', border: `1px solid ${guardVerdict === 'warn' ? '#fb923c44' : '#ef444444'}` }}>
             {result.input_guard.flags.map((f, i) => (
               <div key={i} style={{ color: 'var(--text-dim)' }}>
@@ -1318,98 +1311,175 @@ function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, set
         )}
       </PStep>
 
-      <PStep><div className="pipeline-step-label">Structural Resolve{stageTime('structural_resolve') && <span className="step-timing">{stageTime('structural_resolve')}</span>}</div></PStep>
-      <PStep><div className="pipeline-step-label">Embed Query{stageTime('embed_query') && <span className="step-timing">{stageTime('embed_query')}</span>}</div></PStep>
+      {/* Step 3: STRUCTURAL RESOLVE */}
+      <PStep status={stepStatus('structural_resolve')}>
+        <div className="pipeline-step-label">Structural Resolve{'structural_resolve' in stageStatuses && stageTime('structural_resolve') && <span className="step-timing">{stageTime('structural_resolve')}</span>}</div>
+      </PStep>
 
-      {hasNeurons && result.intent && (
-        <PStep>
-          <div className="pipeline-step-label">Classify <span className="step-timing">{result.intent}{stageTime('classify') && ` · ${stageTime('classify')}`}</span></div>
-          <div className="tags">
-            {result.departments.map(d => <span key={d} className="tag dept">{d}</span>)}
-            {result.role_keys.map(r => <span key={r} className="tag role">{r}</span>)}
-            {result.keywords.map(k => <span key={k} className="tag keyword">{k}</span>)}
-          </div>
-        </PStep>
-      )}
+      {/* Step 4: EMBED QUERY */}
+      <PStep status={stepStatus('embed_query')}>
+        <div className="pipeline-step-label">Embed Query{'embed_query' in stageStatuses && stageTime('embed_query') && <span className="step-timing">{stageTime('embed_query')}</span>}</div>
+      </PStep>
 
-      <PStep><div className="pipeline-step-label">Semantic Prefilter{stageTime('semantic_prefilter') && <span className="step-timing">{stageTime('semantic_prefilter')}</span>}</div></PStep>
-
-      {hasNeurons && (
-        <PStep>
-          <div className="pipeline-step-label">Score &amp; Spread Activation <span className="step-timing">{result.neurons_activated} activated{stageTime('score_neurons') && ` · ${stageTime('score_neurons')}`}{stageTime('spread_activation') && ` + ${stageTime('spread_activation')}`}</span></div>
-          <div style={{ height: 500 }}>
-            <NeuronTreeViz queryId={result.query_id} neuronScores={result.neuron_scores} onNavigateToNeuron={onNavigateToNeuron} />
-          </div>
-        </PStep>
-      )}
-
-      {hasNeurons && (
-        <PStep>
-          <div className="pipeline-step-label">Assemble Prompt <span className="step-timing">{result.neurons_activated} neurons{stageTime('assemble_prompt') && ` · ${stageTime('assemble_prompt')}`}</span></div>
-        </PStep>
-      )}
-
-      <PStep>
-        <div className="pipeline-step-label">Execute LLM <span className="step-timing">{result.slots.length} slot{result.slots.length !== 1 ? 's' : ''}{stageTime('execute_llm') && ` · ${stageTime('execute_llm')}`}</span></div>
-        <Section title={`Responses (${result.slots.length})`} defaultOpen={true}>
-          <div className="output-grid">
-            {result.slots.map((slot, i) => {
-              const check = result.output_checks?.[i];
-              return (
-                <div key={i} className="output-card" style={{ borderLeft: `3px solid ${getModeColor(slot.mode)}` }}>
-                  <div className="output-card-header" style={{ color: getModeColor(slot.mode) }}>
-                    {slotDisplayLabel(slot)}
-                  </div>
-                  {check && (
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                      {check.grounding && check.grounding.confidence !== null && (
-                        <span style={{
-                          fontSize: '0.6rem', padding: '1px 5px', borderRadius: 3,
-                          background: check.grounding.grounded ? '#22c55e22' : '#fb923c22',
-                          color: check.grounding.grounded ? '#22c55e' : '#fb923c',
-                        }} title={check.grounding.reason}>
-                          Grounding: {(check.grounding.confidence * 100).toFixed(0)}%
-                        </span>
-                      )}
-                      {check.risk_flags.map((rf, j) => (
-                        <span key={j} style={{
-                          fontSize: '0.6rem', padding: '1px 5px', borderRadius: 3,
-                          background: rf.category === 'dual_use' ? '#ef444422' : '#fb923c22',
-                          color: rf.category === 'dual_use' ? '#ef4444' : '#fb923c',
-                        }} title={rf.excerpt}>
-                          {rf.category}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {slot.error ? (
-                    <div style={{ padding: '8px', background: '#ef444422', borderRadius: 4, color: '#fca5a5', fontSize: '0.82rem' }}>
-                      {slot.response}
-                    </div>
-                  ) : (
-                    <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
-                  )}
+      {/* Step 5: CLASSIFY */}
+      <PStep status={stepStatus('classify')}>
+        {(() => {
+          const classifyData = stageStatuses['classify']?.detail as any;
+          const intent = classifyData?.intent || result?.intent;
+          const departments = classifyData?.departments || result?.departments || [];
+          const role_keys = classifyData?.role_keys || result?.role_keys || [];
+          const keywords = classifyData?.keywords || result?.keywords || [];
+          return (
+            <>
+              <div className="pipeline-step-label">Classify{'classify' in stageStatuses && intent && <span className="step-timing">{intent}{stageTime('classify') && ` · ${stageTime('classify')}`}</span>}</div>
+              {'classify' in stageStatuses && intent && (
+                <div className="tags">
+                  {departments.map((d: string) => <span key={d} className="tag dept">{d}</span>)}
+                  {role_keys.map((r: string) => <span key={r} className="tag role">{r}</span>)}
+                  {keywords.map((k: string) => <span key={k} className="tag keyword">{k}</span>)}
                 </div>
+              )}
+            </>
+          );
+        })()}
+      </PStep>
+
+      {/* Step 6: SEMANTIC PREFILTER */}
+      <PStep status={stepStatus('semantic_prefilter')}>
+        <div className="pipeline-step-label">Semantic Prefilter{'semantic_prefilter' in stageStatuses && stageTime('semantic_prefilter') && <span className="step-timing">{stageTime('semantic_prefilter')}</span>}</div>
+      </PStep>
+
+      {/* Step 7: SPREAD ACTIVATION */}
+      <PStep status={stepStatus('score_neurons')}>
+        {(() => {
+          const scoreData = stageStatuses['score_neurons']?.detail as any;
+          const neuronScores = scoreData?.neuron_scores || result?.neuron_scores || [];
+          const spreadData = stageStatuses['spread_activation']?.detail as any;
+          const neuronsActivated = spreadData?.neurons_activated || scoreData?.scored || 0;
+          return (
+            <>
+              <div className="pipeline-step-label">Spread Activation{'score_neurons' in stageStatuses && <span className="step-timing">{neuronsActivated} activated{stageTime('score_neurons') && ` · ${stageTime('score_neurons')}`}{stageTime('spread_activation') && ` + ${stageTime('spread_activation')}`}</span>}</div>
+              {'score_neurons' in stageStatuses && neuronScores.length > 0 && result && (
+                <div style={{ height: 500 }}>
+                  <NeuronTreeViz queryId={result.query_id} neuronScores={neuronScores} onNavigateToNeuron={onNavigateToNeuron} />
+                </div>
+              )}
+            </>
+          );
+        })()}
+      </PStep>
+
+      {/* Step 8: ASSEMBLE PROMPT */}
+      <PStep status={stepStatus('assemble_prompt')}>
+        {(() => {
+          const assembleData = stageStatuses['assemble_prompt']?.detail as any;
+          const assembled = assembleData?.assembled_prompt || result?.assembled_prompt;
+          const neuronsActivated = assembleData?.neurons_activated || result?.neurons_activated || 0;
+          return (
+            <>
+              <div className="pipeline-step-label">Assemble Prompt{'assemble_prompt' in stageStatuses && <span className="step-timing">{neuronsActivated} neurons{stageTime('assemble_prompt') && ` · ${stageTime('assemble_prompt')}`}</span>}</div>
+              {'assemble_prompt' in stageStatuses && assembled && (
+                <Section title="Assembled Context" defaultOpen={false}>
+                  <div className="response-text" style={{ fontSize: '0.85rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {assembled}
+                  </div>
+                </Section>
+              )}
+            </>
+          );
+        })()}
+      </PStep>
+
+      {/* Step 9: EXECUTE LLMS */}
+      <PStep status={stepStatus('execute_llm')}>
+        <div className="pipeline-step-label">Execute LLMs{result && <span className="step-timing">{result.slots.length} slot{result.slots.length !== 1 ? 's' : ''}{stageTime('execute_llm') && ` · ${stageTime('execute_llm')}`}</span>}</div>
+        {loading && 'execute_llm' in stageStatuses && (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: 8 }}>
+            {slotConfigs.map((sc, i) => {
+              const slotDone = !slotLoadingSet.has(i);
+              const modeInfo = availableModels.find(m => m.display_name.toLowerCase() === sc.mode.split('_')[0].toLowerCase());
+              const modeLabel = modeInfo ? modeInfo.display_name.slice(0, 3).toUpperCase() : sc.mode.slice(0, 3).toUpperCase();
+              return (
+                <span key={sc.id} className={`slot-status-badge${slotDone ? ' done' : ' active'}`}>
+                  {slotDone ? 'DONE' : 'RUNNING'} {modeLabel}
+                </span>
               );
             })}
           </div>
-        </Section>
+        )}
+        {'execute_llm' in stageStatuses && result && (
+          <Section title={`Responses (${result.slots.length})`} defaultOpen={true}>
+            <div className="output-grid">
+              {result.slots.map((slot, i) => {
+                const check = result.output_checks?.[i];
+                return (
+                  <div key={i} className="output-card" style={{ borderLeft: `3px solid ${getModeColor(slot.mode)}` }}>
+                    <div className="output-card-header" style={{ color: getModeColor(slot.mode) }}>
+                      {String.fromCharCode(65 + i)} — {slotDisplayLabel(slot)}
+                    </div>
+                    {check && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                        {check.grounding && check.grounding.confidence !== null && (
+                          <span style={{
+                            fontSize: '0.6rem', padding: '1px 5px', borderRadius: 3,
+                            background: check.grounding.grounded ? '#22c55e22' : '#fb923c22',
+                            color: check.grounding.grounded ? '#22c55e' : '#fb923c',
+                          }} title={check.grounding.reason}>
+                            Grounding: {(check.grounding.confidence * 100).toFixed(0)}%
+                          </span>
+                        )}
+                        {check.risk_flags.map((rf, j) => (
+                          <span key={j} style={{
+                            fontSize: '0.6rem', padding: '1px 5px', borderRadius: 3,
+                            background: rf.category === 'dual_use' ? '#ef444422' : '#fb923c22',
+                            color: rf.category === 'dual_use' ? '#ef4444' : '#fb923c',
+                          }} title={rf.excerpt}>
+                            {rf.category}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {slot.error ? (
+                      <div style={{ padding: '8px', background: '#ef444422', borderRadius: 4, color: '#fca5a5', fontSize: '0.82rem' }}>
+                        {slot.response}
+                      </div>
+                    ) : (
+                      <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slot.response ?? '', { async: false }) as string }} />
+                    )}
+                    {!slot.error && (slot.input_tokens > 0 || (slot.cache_creation_tokens ?? 0) > 0 || (slot.cache_read_tokens ?? 0) > 0) && (
+                      <div style={{ display: 'flex', gap: 12, marginTop: 10, fontSize: '0.75rem', color: 'var(--text-dim)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                        <div><strong style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{slot.input_tokens.toLocaleString()}</strong><br />Input</div>
+                        {(slot.cache_creation_tokens ?? 0) > 0 && <div><strong style={{ color: '#fb923c', fontFamily: 'monospace' }}>{slot.cache_creation_tokens!.toLocaleString()}</strong><br />Cache Create</div>}
+                        {(slot.cache_read_tokens ?? 0) > 0 && <div><strong style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{slot.cache_read_tokens!.toLocaleString()}</strong><br />Cache Read</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+        )}
       </PStep>
 
-      <PStep>
-        <div className="pipeline-step-label">Output Checks <span className="step-timing">{result.output_checks?.length ?? 0} checked{stageTime('output_checks') && ` · ${stageTime('output_checks')}`}</span></div>
+      {/* Step 10: OUTPUT CHECKS */}
+      <PStep status={stepStatus('output_checks')}>
+        <div className="pipeline-step-label">Output Checks{result && <span className="step-timing">{result.output_checks?.length ?? 0} checked{stageTime('output_checks') && ` · ${stageTime('output_checks')}`}</span>}</div>
       </PStep>
 
-      <PStep>
-        <div className="pipeline-step-label">Cost &amp; Tokens {totalElapsedMs != null && <span className="step-timing">{(totalElapsedMs / 1000).toFixed(1)}s total</span>}</div>
-        <Section title="Cost & Tokens" defaultOpen={true}>
-          <TokenCharts {...slotsToChartModels(result.slots, result.classify_cost, baseline)} totalElapsedMs={totalElapsedMs} />
-        </Section>
+      {/* Step 11: COST & TOKEN ANALYSIS */}
+      <PStep status={result ? 'done' : 'pending'}>
+        <div className="pipeline-step-label">Cost & Token Analysis{totalElapsedMs != null && result && <span className="step-timing">{(totalElapsedMs / 1000).toFixed(1)}s total</span>}</div>
+        {'output_checks' in stageStatuses && result && (
+          <Section title="Cost & Tokens" defaultOpen={true}>
+            <TokenCharts {...slotsToChartModels(result.slots, result.classify_cost, baseline)} totalElapsedMs={totalElapsedMs} />
+          </Section>
+        )}
       </PStep>
 
-      {result.slots.length >= 2 && (
-        <PStep>
-          <div className="pipeline-step-label">Evaluation</div>
+      {/* Step 12: EVALUATION */}
+      <PStep status={evalText ? 'done' : evalLoading ? 'active' : result && result.slots.length >= 2 ? 'pending' : 'pending'}>
+        <div className="pipeline-step-label">Evaluation</div>
+        {'execute_llm' in stageStatuses && result && result.slots.length >= 2 && (
           <Section id="section-compare" title="Compare Outputs" className="eval-card" headerRight={
             <div className="eval-controls">
               <select value={evalModel} onChange={e => setEvalModel(e.target.value)}>
@@ -1417,11 +1487,17 @@ function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, set
                   <option key={m.display_name} value={m.display_name}>Evaluate with {m.display_name}</option>
                 ))}
               </select>
-              <button className="btn btn-sm" onClick={onEval} disabled={evalLoading || !!evalText}>
-                {evalLoading ? 'Evaluating...' : evalText ? 'Evaluated' : 'Compare'}
-              </button>
+              {!evalText && !evalLoading && <button className="btn btn-sm" onClick={onEval}>Evaluate</button>}
+              {evalLoading && <span className="eval-running-label">Evaluating...</span>}
+              {evalText && <span className="eval-done-label">Evaluated</span>}
             </div>
           }>
+            {evalLoading && (
+              <div className="eval-loading-row">
+                <span className="stage-spinner" />
+                Evaluating responses...
+              </div>
+            )}
             {evalText && (
               <div className="eval-result">
                 <div className="eval-model-tag">Evaluated by {evalMdl}</div>
@@ -1447,36 +1523,42 @@ function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, set
               </div>
             )}
           </Section>
-        </PStep>
-      )}
-
-      <PStep>
-        <div className="pipeline-step-label">Refine</div>
-        <Section title="Refine Neurons" defaultOpen={false}>
-          <RefinePanel queryId={result.query_id} hasEval={!!evalText} hasNeurons={hasNeurons} onRunAgain={onRunAgain} onPhaseChange={onRefinePhaseChange} initialRefineResult={initialRefineResult} onNavigateToNeuron={onNavigateToNeuron} />
-        </Section>
+        )}
       </PStep>
 
-      <PStep>
-        <div className="pipeline-step-label">Export &amp; Rate</div>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          {result.slots.length >= 1 && (
-            <button className="btn btn-sm" onClick={() => {
-              const lines: string[] = [];
-              lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '', 'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5).', '');
-              lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', `User query: ${baseline}`, '');
-              result.slots.forEach((slot, i) => { lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, ''); });
-              if (evalScores.length > 0) { lines.push('='.repeat(80), 'INTERNAL EVALUATION', '='.repeat(80), ''); lines.push('Dimension'.padEnd(16) + evalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join('')); for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) { lines.push((dim.charAt(0).toUpperCase() + dim.slice(1)).padEnd(16) + evalScores.map(s => `${s[dim]}/5`.padEnd(12)).join('')); } if (evalWinner) lines.push('', `Internal winner: Answer ${evalWinner}`); if (evalText) lines.push('', evalText); }
-              lines.push('', '='.repeat(80), 'END', '='.repeat(80));
-              const blob = new Blob([lines.join('\n')], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `corvus-blind-eval-q${result.query_id}.txt`; a.click();
-            }}>Export Blind Evaluation</button>
-          )}
-          <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating >= 0.7 ? '#22c55e33' : undefined }} onClick={() => setRating(0.85)} disabled={rated}>{'👍'}</button>
-          <button className="btn btn-sm" style={{ fontSize: '1rem', padding: '3px 10px', background: rated && rating < 0.3 ? '#ef444433' : undefined }} onClick={() => setRating(0.15)} disabled={rated}>{'👎'}</button>
-          <input type="range" min="0" max="1" step="0.05" value={rating} onChange={e => setRating(parseFloat(e.target.value))} disabled={rated} style={{ width: 80 }} />
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{rating.toFixed(2)}</span>
-          <button className="btn btn-sm" onClick={onRate} disabled={rated}>{rated ? 'Rated' : 'Rate'}</button>
-        </div>
+      {/* Step 13: REFINE */}
+      <PStep status={result && evalText ? 'done' : result ? 'pending' : 'pending'}>
+        <div className="pipeline-step-label">Refine</div>
+        {'execute_llm' in stageStatuses && result && (
+          <Section title="Refine Neurons" defaultOpen={false}>
+            <RefinePanel queryId={result.query_id} hasEval={!!evalText} hasNeurons={hasNeurons} onRunAgain={onRunAgain} onPhaseChange={onRefinePhaseChange} initialRefineResult={initialRefineResult} onNavigateToNeuron={onNavigateToNeuron} />
+          </Section>
+        )}
+      </PStep>
+
+      {/* Step 14: EXPORT & RATE */}
+      <PStep status={result ? 'done' : 'pending'}>
+        <div className="pipeline-step-label">Export & Rate</div>
+        {'execute_llm' in stageStatuses && result && (
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            {result.slots.length >= 1 && (
+              <button className="btn btn-sm" onClick={() => {
+                const lines: string[] = [];
+                lines.push('='.repeat(80), 'BLIND EVALUATION REQUEST', '='.repeat(80), '', 'Score each answer on: Accuracy, Completeness, Clarity, Faithfulness, Overall (1-5).', '');
+                lines.push('='.repeat(80), 'PROMPT', '='.repeat(80), '', `User query: ${baseline}`, '');
+                result.slots.forEach((slot, i) => { lines.push('='.repeat(80), `ANSWER ${String.fromCharCode(65 + i)}`, '='.repeat(80), '', slot.response, ''); });
+                if (evalScores.length > 0) { lines.push('='.repeat(80), 'INTERNAL EVALUATION', '='.repeat(80), ''); lines.push('Dimension'.padEnd(16) + evalScores.map(s => `Answer ${s.answer_label}`.padEnd(12)).join('')); for (const dim of ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const) { lines.push((dim.charAt(0).toUpperCase() + dim.slice(1)).padEnd(16) + evalScores.map(s => `${s[dim]}/5`.padEnd(12)).join('')); } if (evalWinner) lines.push('', `Internal winner: Answer ${evalWinner}`); if (evalText) lines.push('', evalText); }
+                lines.push('', '='.repeat(80), 'END', '='.repeat(80));
+                const blob = new Blob([lines.join('\n')], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `corvus-blind-eval-q${result.query_id}.txt`; a.click();
+              }}>Export Blind Evaluation</button>
+            )}
+            <button className="btn btn-sm rate-btn rate-btn-positive" style={{ background: rated && rating >= 0.7 ? '#22c55e33' : undefined }} onClick={() => setRating(0.85)} disabled={rated}>POSITIVE</button>
+            <button className="btn btn-sm rate-btn rate-btn-negative" style={{ background: rated && rating < 0.3 ? '#ef444433' : undefined }} onClick={() => setRating(0.15)} disabled={rated}>NEGATIVE</button>
+            <input type="range" min="0" max="1" step="0.05" value={rating} onChange={e => setRating(parseFloat(e.target.value))} disabled={rated} style={{ width: 80 }} />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{rating.toFixed(2)}</span>
+            <button className="btn btn-sm" onClick={onRate} disabled={rated}>{rated ? 'Rated' : 'Rate'}</button>
+          </div>
+        )}
       </PStep>
     </div>
   );
@@ -1487,7 +1569,7 @@ function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, set
 function HistoryDetail({ query, baseline = 'opus_raw', onNavigateToNeuron }: { query: QueryDetail; baseline?: string; onNavigateToNeuron?: (id: number) => void }) {
   const { models: availableModels } = useModels();
   const [evalLoading, setEvalLoading] = useState(false);
-  const [evalModel, setEvalModel] = useState<string>('haiku');
+  const [evalModel, setEvalModel] = useState<string>('sonnet');
   const [localEvalText, setLocalEvalText] = useState(query.eval_text);
   const [localEvalMdl, setLocalEvalMdl] = useState(query.eval_model);
   const [localEvalIn, setLocalEvalIn] = useState(query.eval_input_tokens);

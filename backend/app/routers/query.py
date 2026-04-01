@@ -19,15 +19,7 @@ from app.schemas import (
     SlotResult,  # For backward-compat: parsing legacy multi-slot query data
 )
 from app.services.executor import execute_query, prepare_context
-from app.services.claude_cli import claude_chat as llm_chat, estimate_cost, MODEL_REGISTRY
-
-
-def get_available_models() -> list[dict]:
-    return [{"display_name": n, "provider": "anthropic", "api_id": m.api_id, "tier": "frontier", "input_price": m.input_price, "output_price": m.output_price} for n, m in MODEL_REGISTRY.items()]
-
-
-def get_valid_model_names() -> set[str]:
-    return set(MODEL_REGISTRY.keys())
+from app.services.llm_provider import llm_chat, estimate_cost, MODEL_REGISTRY, get_available_models, get_valid_model_names
 from app.services.neuron_service import get_system_state, score_candidates
 from app.services.scoring_engine import update_impact_ema
 from app.services.input_guard import check_input, check_output_risk, check_output_grounding
@@ -527,7 +519,7 @@ def _eval_slot_label(slot: SlotResult) -> str:
 
 
 def _build_eval_prompts(
-    user_message: str, slots: list[SlotResult],
+    user_message: str, slots: list[SlotResult], domain_knowledge: str = "",
 ) -> tuple[str, str, list[tuple[str, SlotResult]]]:
     answer_map: list[tuple[str, SlotResult]] = []
     sections = [f"User's question:\n{user_message}"]
@@ -549,26 +541,52 @@ def _build_eval_prompts(
     eval_prompt = "\n\n---\n\n".join(sections)
     assert len(sections) >= 3, "eval prompt must include question + at least 2 answers"
 
-    eval_system = (
-        "You are a blind evaluator comparing AI responses. You have NO prior context — "
-        "only the user's question and the answers provided.\n\n"
-        "Score each answer on these dimensions (1=poor, 5=excellent):\n"
-        "- Accuracy: factual correctness\n"
-        "- Completeness: covers the full question\n"
-        "- Clarity: well-structured, easy to understand\n"
-        "- Faithfulness: no hallucinations or unsupported claims (5=fully faithful)\n"
-        "- Overall: holistic quality\n\n"
-        "You MUST respond with EXACTLY this format — a JSON block followed by your verdict:\n\n"
-        "```json\n"
-        '{"scores": [\n'
-        + ",\n".join(score_template) + "\n"
-        "],\n"
-        '"winner": "<letter or tie>",\n'
-        '"verdict": "<2-4 sentence comparison explaining your reasoning>"\n'
-        "}\n"
-        "```\n\n"
-        "No other text outside the JSON block. Use the answer labels (A, B, etc.) in your verdict."
-    )
+    # Build system prompt with optional domain knowledge
+    if domain_knowledge:
+        eval_system = (
+            "You are a domain expert evaluating AI responses against authoritative knowledge.\n\n"
+            "## Domain Knowledge (Ground Truth)\n"
+            "Use the following domain facts to assess accuracy and faithfulness:\n\n"
+            + domain_knowledge + "\n\n"
+            "## Evaluation Instructions\n"
+            "Score each answer on these dimensions (1=poor, 5=excellent):\n"
+            "- Accuracy: aligns with the domain knowledge above; factually correct\n"
+            "- Completeness: covers the full question\n"
+            "- Clarity: well-structured, easy to understand\n"
+            "- Faithfulness: no hallucinations or claims unsupported by domain knowledge (5=fully faithful)\n"
+            "- Overall: holistic quality\n\n"
+            "You MUST respond with EXACTLY this format — a JSON block followed by your verdict:\n\n"
+            "```json\n"
+            '{"scores": [\n'
+            + ",\n".join(score_template) + "\n"
+            "],\n"
+            '"winner": "<letter or tie>",\n'
+            '"verdict": "<2-4 sentence comparison explaining your reasoning>"\n'
+            "}\n"
+            "```\n\n"
+            "No other text outside the JSON block. Use the answer labels (A, B, etc.) in your verdict."
+        )
+    else:
+        eval_system = (
+            "You are a blind evaluator comparing AI responses. You have NO prior context — "
+            "only the user's question and the answers provided.\n\n"
+            "Score each answer on these dimensions (1=poor, 5=excellent):\n"
+            "- Accuracy: factual correctness\n"
+            "- Completeness: covers the full question\n"
+            "- Clarity: well-structured, easy to understand\n"
+            "- Faithfulness: no hallucinations or unsupported claims (5=fully faithful)\n"
+            "- Overall: holistic quality\n\n"
+            "You MUST respond with EXACTLY this format — a JSON block followed by your verdict:\n\n"
+            "```json\n"
+            '{"scores": [\n'
+            + ",\n".join(score_template) + "\n"
+            "],\n"
+            '"winner": "<letter or tie>",\n'
+            '"verdict": "<2-4 sentence comparison explaining your reasoning>"\n'
+            "}\n"
+            "```\n\n"
+            "No other text outside the JSON block. Use the answer labels (A, B, etc.) in your verdict."
+        )
     assert eval_system and eval_prompt, "eval prompts must be non-empty"
 
     return eval_system, eval_prompt, answer_map
@@ -641,7 +659,12 @@ async def _save_eval_scores(
 async def evaluate_query(
     query_id: int, req: EvalRequest, db: AsyncSession = Depends(get_db)
 ):
-    """Run blind LLM evaluation comparing multiple response slots for a query."""
+    """Run domain-informed LLM evaluation comparing multiple response slots for a query.
+
+    Assembles neuron context from the query's activated neurons, providing the evaluator
+    with ground-truth domain knowledge. Scores responses based on accuracy against the
+    domain facts, completeness, clarity, and faithfulness.
+    """
     query = await db.get(Query, query_id)
     if not query:
         raise HTTPException(status_code=404, detail="Query not found")
@@ -651,7 +674,18 @@ async def evaluate_query(
         raise HTTPException(status_code=400, detail="Need at least two responses to compare")
     assert len(slots) >= 2, f"evaluate_query requires >= 2 slots, got {len(slots)}"
 
-    eval_system, eval_prompt, answer_map = _build_eval_prompts(query.user_message, slots)
+    # Assemble neuron context (ground truth for evaluation)
+    from app.services.executor import prepare_context
+    neuron_context = None
+    domain_knowledge = ""
+    try:
+        neuron_context = await prepare_context(db, query.user_message, token_budget=8000, top_k=50)
+        domain_knowledge = neuron_context.system_prompt if neuron_context else ""
+    except Exception:
+        # If prepare_context fails, fall back to blind evaluation
+        domain_knowledge = ""
+
+    eval_system, eval_prompt, answer_map = _build_eval_prompts(query.user_message, slots, domain_knowledge)
     assert len(answer_map) >= 2, "answer_map must have at least 2 entries"
 
     result = await llm_chat(eval_system, eval_prompt, max_tokens=2048, model=req.model)
@@ -830,27 +864,41 @@ async def _load_refine_prerequisites(
     return query, eval_scores, neurons
 
 
-def _build_refine_system_prompt() -> str:
-    return (
-        "You are a neuron graph architect. You analyze evaluation results and suggest "
-        "concrete improvements to the neuron knowledge graph.\n\n"
-        "Your goal: improve the quality of neuron-enhanced responses by refining neuron content, "
-        "summaries, and labels, or by suggesting new neurons to fill knowledge gaps.\n\n"
-        "Rules:\n"
+def _build_refine_system_prompt(domain_knowledge: str = "") -> str:
+    base_prompt = (
+        "You are an impartial analyst reviewing a bifurcated knowledge pipeline.\n\n"
+        "Two types of responses were generated for the same query:\n"
+        "- NEURON-ENHANCED: responses built with assembled domain knowledge from a neuron graph\n"
+        "- RAW BASELINE: responses from the same LLM with no domain augmentation\n\n"
+        "Your job:\n"
+        "1. Compare neuron-enhanced vs raw responses — identify where the neurons helped or hurt quality\n"
+        "2. Find gaps: did raw slots capture anything useful that neuron slots missed?\n"
+        "3. Identify inaccuracies or weaknesses in the neuron content that led to worse answers\n"
+        "4. Propose concrete improvements: update neuron content, summaries, labels, or suggest new neurons to fill gaps\n"
+        "5. Do NOT fabricate domain facts — only suggest changes grounded in evidence from the responses\n\n"
+    )
+
+    if domain_knowledge:
+        base_prompt += (
+            "## Domain Knowledge (Ground Truth)\n"
+            "This is the assembled neuron context that was provided to the neuron-enhanced slots:\n\n"
+            + domain_knowledge + "\n\n"
+        )
+
+    base_prompt += (
+        "## Rules for Refinements\n"
         "- Only suggest changes that would meaningfully improve response quality\n"
-        "- For updates: specify the exact field (content, summary, label, or is_active), "
-        "the old value, and the new value\n"
+        "- For updates: specify the exact field (content, summary, label, or is_active), the old value, and the new value\n"
         "- For new neurons: specify parent_id (an existing neuron ID from the activated list below), "
         "layer (0-5), node_type, label, content, summary, and optionally department/role_key\n"
         "- New neurons MUST attach under an existing activated neuron — do NOT create new departments (L0) or roles (L1)\n"
         "- Keep content concise and factual — neurons are context snippets, not essays\n"
-        "- If the neuron-enhanced response performed well, fewer changes are needed\n"
-        "- You only see the neurons that were activated for this query, not the full graph. "
-        "Assume other relevant neurons may already exist elsewhere — focus on improving what you see.\n\n"
+        "- You only see the neurons that were activated for this query, not the full graph\n\n"
         "You MUST respond with EXACTLY a JSON block:\n"
         "```json\n"
         '{\n'
-        '  "reasoning": "<1-3 sentences explaining your analysis>",\n'
+        '  "reasoning": "<2-4 sentences explaining your high-level analysis>",\n'
+        '  "neuron_vs_raw_verdict": "<where neurons helped, where they hurt, what raw captured that neurons missed>",\n'
         '  "updates": [\n'
         '    {"neuron_id": <id>, "field": "<content|summary|label|is_active>", '
         '"old_value": "<current>", "new_value": "<improved>", "reason": "<why>"}\n'
@@ -864,6 +912,7 @@ def _build_refine_system_prompt() -> str:
         "```\n"
         "No text outside the JSON block."
     )
+    return base_prompt
 
 
 def _build_refine_user_prompt(
@@ -891,18 +940,23 @@ def _build_refine_user_prompt(
     eval_summary = "\n".join(eval_lines)
     verdict = query.eval_text or "No verdict"
 
+    # Include ALL responses (both neuron-enhanced and raw baseline)
     slots = _parse_slots(query)
-    neuron_response = next((s.response for s in slots if s.neurons), None)
+    response_sections = []
+    for i, slot in enumerate(slots):
+        letter = chr(65 + i)
+        slot_type = "[NEURON-ENHANCED]" if slot.neurons else "[RAW BASELINE]"
+        response_sections.append(f"## Response {letter} — {slot.mode} {slot_type}\n{slot.response}")
 
     prompt = (
         f"## User Question\n{query.user_message}\n\n"
         f"## Eval Scores\n{eval_summary}\n\n"
         f"## Eval Verdict\n{verdict}\n\n"
+        f"## All Responses\n"
+        + "\n\n".join(response_sections) + "\n\n"
         f"## Activated Neurons ({len(neurons)} total)\n"
         + "\n---\n".join(neuron_sections)
     )
-    if neuron_response:
-        prompt += f"\n\n## Neuron-Enhanced Response\n{neuron_response}"
     if user_context and user_context.strip():
         prompt += (
             f"\n\n## Additional Context from User\n"
@@ -915,8 +969,9 @@ def _build_refine_user_prompt(
 
 def _parse_refine_response(
     raw_text: str,
-) -> tuple[str, list[NeuronUpdateSuggestion], list[NewNeuronSuggestion]]:
+) -> tuple[str, str, list[NeuronUpdateSuggestion], list[NewNeuronSuggestion]]:
     reasoning = ""
+    neuron_vs_raw_verdict = ""
     updates: list[NeuronUpdateSuggestion] = []
     new_neurons: list[NewNeuronSuggestion] = []
     try:
@@ -928,6 +983,7 @@ def _parse_refine_response(
             json_str = json_str.strip()
         parsed = json.loads(json_str)
         reasoning = parsed.get("reasoning", "")
+        neuron_vs_raw_verdict = parsed.get("neuron_vs_raw_verdict", "")
         for u in parsed.get("updates", []):
             updates.append(NeuronUpdateSuggestion(
                 neuron_id=u["neuron_id"],
@@ -950,6 +1006,7 @@ def _parse_refine_response(
             ))
     except (json.JSONDecodeError, KeyError, TypeError):
         reasoning = raw_text
+        neuron_vs_raw_verdict = ""
     return reasoning, updates, new_neurons
 
 
@@ -957,14 +1014,28 @@ def _parse_refine_response(
 async def refine_query(
     query_id: int, req: RefineRequest, db: AsyncSession = Depends(get_db)
 ):
-    """Generate LLM-driven neuron update and creation suggestions based on eval results."""
+    """Generate LLM-driven neuron update and creation suggestions based on eval results.
+
+    Opus acts as a third-party observer comparing neuron-enhanced vs. raw slot responses.
+    It analyzes where neurons helped or hurt, identifies inaccuracies in neuron content,
+    and proposes targeted improvements grounded in evidence from the responses.
+    """
     query, eval_scores, neurons = await _load_refine_prerequisites(query_id, db)
 
-    system_prompt = _build_refine_system_prompt()
+    # Assemble fresh neuron context (ground truth for analysis)
+    from app.services.executor import prepare_context
+    domain_knowledge = ""
+    try:
+        neuron_context = await prepare_context(db, query.user_message, token_budget=8000, top_k=50)
+        domain_knowledge = neuron_context.system_prompt if neuron_context else ""
+    except Exception:
+        domain_knowledge = ""
+
+    system_prompt = _build_refine_system_prompt(domain_knowledge)
     user_prompt = _build_refine_user_prompt(query, neurons, eval_scores, req.user_context)
 
     result = await llm_chat(system_prompt, user_prompt, max_tokens=req.max_tokens, model=req.model)
-    reasoning, updates, new_neurons = _parse_refine_response(result["text"].strip())
+    reasoning, neuron_vs_raw_verdict, updates, new_neurons = _parse_refine_response(result["text"].strip())
 
     response = RefineResponse(
         query_id=query_id,
@@ -972,6 +1043,7 @@ async def refine_query(
         input_tokens=result["input_tokens"],
         output_tokens=result["output_tokens"],
         reasoning=reasoning,
+        neuron_vs_raw_verdict=neuron_vs_raw_verdict,
         updates=updates,
         new_neurons=new_neurons,
     )
