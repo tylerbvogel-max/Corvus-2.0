@@ -354,7 +354,7 @@ def _build_spread_entry(
     for s in scores:
         if s.get("spread_boost", 0) == 0:
             nid = s["neuron_id"]
-            if nid in neuron_map:
+            if nid in neuron_map and neuron_map[nid]["department"]:
                 source_depts.add(neuron_map[nid]["department"])
 
     promoted_depts: set[str] = set()
@@ -369,7 +369,8 @@ def _build_spread_entry(
             "department": info["department"],
             "boost": round(p["spread_boost"], 4),
         })
-        promoted_depts.add(info["department"])
+        if info["department"]:
+            promoted_depts.add(info["department"])
 
     cross_dept = bool(promoted_depts - source_depts) if source_depts else False
     for sd in source_depts:

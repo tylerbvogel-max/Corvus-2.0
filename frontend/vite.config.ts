@@ -7,7 +7,7 @@ const apiTarget = `http://127.0.0.1:${apiPort}`
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 8004,
     proxy: {
       '/neurons': apiTarget,
       '/queries': apiTarget,

@@ -275,6 +275,8 @@ export interface SlotSpec {
   token_budget: number;
   top_k: number;
   max_output_tokens?: number;
+  agent_mode?: boolean;
+  confidence_threshold?: number;
   label?: string;
 }
 
@@ -305,15 +307,23 @@ export interface StageEvent {
 
 export function submitQueryStream(
   message: string,
-  slots: SlotSpec[],
-  onStage: (event: StageEvent) => void,
-  chat_style?: string,
+  agent_mode: boolean = true,
+  confidence_threshold: number = 0.5,
+  onStage?: (event: StageEvent) => void,
   prior_neuron_ids?: number[],
+  slots?: SlotSpec[],
 ): { promise: Promise<QueryResponse>; abort: () => void } {
   const controller = new AbortController();
 
   const promise = (async () => {
-    const body: Record<string, unknown> = { message, slots_v2: slots, chat_style };
+    const body: Record<string, unknown> = { message };
+    // If slots provided, use them directly; otherwise use global agent_mode/confidence_threshold
+    if (slots && slots.length > 0) {
+      body.slots = slots;
+    } else {
+      body.agent_mode = agent_mode;
+      body.confidence_threshold = confidence_threshold;
+    }
     if (prior_neuron_ids && prior_neuron_ids.length > 0) {
       body.prior_neuron_ids = prior_neuron_ids;
     }

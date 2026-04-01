@@ -484,6 +484,7 @@ def _create_query_record(
     slot_specs: list[dict],
     primary_prompt: str,
     classify_result: dict,
+    agent_mode: bool = False,
 ) -> Query:
     assert isinstance(user_message, str), "user_message must be a string"
     assert isinstance(slot_specs, list) and len(slot_specs) > 0, \
@@ -501,6 +502,7 @@ def _create_query_record(
         classify_output_tokens=classify_result["output_tokens"],
         run_neuron=needs_neurons,
         run_opus=any(s["mode"] == "opus_raw" for s in slot_specs),
+        agent_mode=agent_mode,
     )
 
 
@@ -628,17 +630,17 @@ async def _run_direct_call(
     ctx: PreparedContext,
     user_message: str,
     on_stage: StageCallback,
-) -> str:
+) -> dict:
     """Execute direct call path (agent_mode=false): single Haiku call with assembled neurons.
 
     Uses ctx.system_prompt (already assembled by prepare_context) + user message.
-    Returns response text only; cost/token tracking handled separately.
+    Returns dict with text, input_tokens, output_tokens, cost_usd.
     """
     assert ctx is not None, "ctx must be populated from prepare_context"
 
     t0 = time.monotonic()
     result = await llm_chat(
-        prompt=ctx.system_prompt,
+        system_prompt=ctx.system_prompt,
         user_message=user_message,
         max_tokens=4096,
         model="haiku",
@@ -656,7 +658,12 @@ async def _run_direct_call(
             },
         })
 
-    return result.get("text", "")
+    return {
+        "text": result.get("text", ""),
+        "input_tokens": result.get("input_tokens", 0),
+        "output_tokens": result.get("output_tokens", 0),
+        "cost_usd": result.get("cost_usd", 0),
+    }
 
 
 async def _run_agent_pipeline(
@@ -880,70 +887,189 @@ async def _update_counters_and_fire(
     await db.commit()
 
 
+async def _execute_slot(
+    db: AsyncSession,
+    slot: dict,
+    user_message: str,
+    ctx: PreparedContext | None,
+    on_stage: StageCallback = None,
+) -> dict:
+    """Execute a single slot with its own agent_mode and model configuration.
+
+    Returns SlotResult dict with response, tokens, cost, error info.
+    """
+    mode = slot.get("mode", "haiku_neuron")
+    token_budget = slot.get("token_budget", settings.token_budget)
+    agent_mode = slot.get("agent_mode", False)
+    confidence_threshold = slot.get("confidence_threshold", 0.5)
+    label = slot.get("label")
+
+    # Parse mode: "{model}_{type}" (e.g., "haiku_neuron", "sonnet_raw")
+    parts = mode.rsplit("_", 1)
+    model_name = parts[0] if parts else "haiku"
+    slot_type = parts[1] if len(parts) > 1 else "neuron"
+    uses_neurons = slot_type == "neuron"
+
+    start_time = time.monotonic()
+
+    try:
+        if agent_mode and ctx and uses_neurons:
+            # Agent orchestration path
+            agent_exec = await _run_agent_pipeline(db, user_message, ctx, confidence_threshold, on_stage)
+            response_text = agent_exec.synthesis
+            input_tokens = agent_exec.coordinator_input_tokens
+            output_tokens = agent_exec.coordinator_output_tokens
+            cost_usd = agent_exec.total_cost_usd
+        elif uses_neurons and ctx:
+            # Direct call path with neurons
+            direct_result = await _run_direct_call(ctx, user_message, on_stage)
+            response_text = direct_result.get("text", "")
+            input_tokens = direct_result.get("input_tokens", 0)
+            output_tokens = direct_result.get("output_tokens", 0)
+            cost_usd = direct_result.get("cost_usd", 0.0)
+        else:
+            # Raw path: no neurons, just user message + model
+            # Use basic system prompt for raw baseline comparison
+            raw_system_prompt = """You are a knowledgeable expert assistant. Provide accurate, precise answers based on your training knowledge alone. Do not reference external documents or context."""
+            result = await llm_chat(
+                system_prompt=raw_system_prompt,
+                user_message=user_message,
+                max_tokens=4096,
+                model=model_name,
+            )
+            response_text = result.get("text", "")
+            input_tokens = result.get("input_tokens", 0)
+            output_tokens = result.get("output_tokens", 0)
+            cost_usd = result.get("cost_usd", 0)
+
+        duration_ms = round((time.monotonic() - start_time) * 1000)
+
+        return {
+            "mode": mode,
+            "model": model_name,
+            "neurons": uses_neurons,
+            "response": response_text,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+            "token_budget": token_budget,
+            "top_k": ctx.neurons_activated if ctx else 0,
+            "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
+            "agent_mode": agent_mode,
+        }
+    except Exception as e:
+        duration_ms = round((time.monotonic() - start_time) * 1000)
+        return {
+            "mode": mode,
+            "model": model_name,
+            "neurons": uses_neurons,
+            "response": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "token_budget": token_budget,
+            "top_k": 0,
+            "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
+            "agent_mode": agent_mode,
+            "error": True,
+            "error_message": str(e)[:200],
+        }
+
+
+def _eval_slot_label(mode: str, uses_neurons: bool, token_budget: int) -> str:
+    """Generate a descriptive label for a slot."""
+    model_part = mode.split("_")[0].title() if "_" in mode else mode.title()
+    neuron_part = "+ Neurons" if uses_neurons else "Raw"
+    budget_part = f"@ {token_budget // 1000}K"
+    return f"{model_part} {neuron_part} {budget_part}"
+
+
 async def execute_query(
     db: AsyncSession,
     user_message: str,
-    agent_mode: bool = True,
-    confidence_threshold: float = 0.5,
-    on_stage: StageCallback = None,
+    slots: list[dict] | None = None,
     prior_neuron_ids: list[int] | None = None,
+    on_stage: StageCallback = None,
 ) -> dict:
-    """Run the pipeline with per-query agent control (Session 3+).
+    """Run multi-slot query pipeline (Session 3+).
 
-    Unified orchestration:
-    - agent_mode=True: partition neurons by domain, dispatch agents, synthesize
-    - agent_mode=False: classify, score, assemble single prompt, direct Haiku call
+    Each slot can independently control:
+    - Model (haiku, sonnet, opus)
+    - Use neurons (yes/no)
+    - Agent orchestration (yes/no)
+    - Token budgets and top_k
+
+    Shared pipeline:
+    - Single neuron classify → score → spread (shared across all slots)
+    - Each slot executes independently with its own agent_mode
     """
     # Preconditions (JPL Rule 5)
     assert user_message and user_message.strip(), "user_message must be non-empty"
-    assert 0.0 <= confidence_threshold <= 1.0, "confidence_threshold must be in [0.0, 1.0]"
 
-    # Always run neuron pipeline (classify → score → spread → assemble)
-    slot_specs = [{"mode": "placeholder", "token_budget": settings.token_budget, "top_k": settings.top_k_neurons}]
+    # Default to single haiku neuron slot if not specified
+    if not slots:
+        slots = [{
+            "mode": "haiku_neuron",
+            "token_budget": settings.token_budget,
+            "top_k": settings.top_k_neurons,
+            "agent_mode": True,
+            "confidence_threshold": 0.5,
+        }]
+
+    # Always run neuron pipeline once (classify → score → spread → assemble)
+    # Slots will reuse this context
     ctx, classify_result = await _run_neuron_pipeline(
-        db, user_message, slot_specs, settings.top_k_neurons, on_stage,
-        prior_neuron_ids=prior_neuron_ids,
+        db, user_message, slots, max(s.get("top_k", settings.top_k_neurons) for s in slots),
+        on_stage, prior_neuron_ids=prior_neuron_ids,
     )
 
+    # Determine if neurons are actually needed based on slot composition
+    needs_neurons = any(s["mode"] in NEURON_MODES for s in slots)
+
     # Create query record early (before execution)
-    query = _create_query_record(user_message, ctx, needs_neurons=True, slot_specs=slot_specs, primary_prompt="", classify_result=classify_result)
+    query = _create_query_record(user_message, ctx, needs_neurons=needs_neurons, slot_specs=slots, primary_prompt="", classify_result=classify_result, agent_mode=False)
     db.add(query)
     await db.flush()
 
     intent = ctx.intent if ctx else "general_query"
     all_scored = ctx.all_scored if ctx else []
     neuron_map = ctx.neuron_map if ctx else {}
-    slot_results = []
-    agent_execution_result = None
-    response_text = ""
 
-    # Route based on agent_mode
-    if agent_mode and ctx:
-        # Agent orchestration path
-        agent_exec = await _run_agent_pipeline(db, user_message, ctx, confidence_threshold, on_stage)
-        total_cost = _populate_query_from_agent_execution(query, agent_exec, classify_result)
-        agent_execution_result = agent_exec
-        response_text = agent_exec.synthesis
-    else:
-        # Direct call path: use assembled neurons + single Haiku call
-        if ctx:
-            query.assembled_prompt = ctx.system_prompt
-            response_text = await _run_direct_call(ctx, user_message, on_stage)
-            # Populate response on Query record
-            query.response_text = response_text
-            query.model_version = "haiku"
-        total_cost = classify_result.get("cost_usd", 0)
+    # Execute each slot in parallel
+    slot_tasks = []
+    for slot in slots:
+        task = _execute_slot(
+            db=db,
+            slot=slot,
+            user_message=user_message,
+            ctx=ctx,
+            on_stage=on_stage,
+        )
+        slot_tasks.append(task)
+
+    slot_results = await asyncio.gather(*slot_tasks)
+    total_cost = classify_result.get("cost_usd", 0) + sum(s.get("cost_usd", 0) for s in slot_results)
+
+    # Set primary response from first successful slot
+    for slot_result in slot_results:
+        if slot_result.get("response") and not query.response_text:
+            query.response_text = slot_result["response"]
+            query.execute_input_tokens = slot_result.get("input_tokens", 0)
+            query.execute_output_tokens = slot_result.get("output_tokens", 0)
+            query.model_version = slot_result.get("model")
+            break
 
     query.cost_usd = total_cost
-    await _update_counters_and_fire(db, query, slot_results, classify_result, needs_neurons=True, all_scored=all_scored)
+    query.results_json = json.dumps(slot_results)
+    await _update_counters_and_fire(db, query, slot_results, classify_result, needs_neurons=needs_neurons, all_scored=all_scored)
 
     # Postcondition (JPL Rule 5)
     assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
 
     return _build_response(
-        query, ctx, needs_neurons=True, all_scored=all_scored, max_top_k=len(all_scored),
+        query, ctx, needs_neurons=needs_neurons, all_scored=all_scored, max_top_k=len(all_scored),
         neuron_map=neuron_map, classify_result=classify_result, slot_results=slot_results, total_cost=total_cost,
-        agent_execution=agent_execution_result,
+        agent_execution=None,
     )
 
 

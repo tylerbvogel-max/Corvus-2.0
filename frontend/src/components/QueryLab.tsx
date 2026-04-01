@@ -803,6 +803,8 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [stageTimes, setStageTimes] = useState<Record<string, number>>({});
   const stageTimestamps = useRef<Record<string, number>>({});
   const [configCollapsed, setConfigCollapsed] = useState(false);
+  const [agentMode, setAgentMode] = useState(true);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
   const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -834,8 +836,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   }
 
   async function handleSubmit() {
-    const specs = buildSlotSpecs();
-    if (!message.trim() || specs.length === 0) return;
+    if (!message.trim()) return;
     // Abort any in-flight stream
     if (abortRef.current) { abortRef.current(); abortRef.current = null; }
     setLoading(true);
@@ -869,14 +870,14 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       id: -Date.now(),
       user_message: message,
       classified_intent: null,
-      modes: specs.map(s => s.mode),
+      modes: [],
       cost_usd: null,
       user_rating: null,
       created_at: new Date().toISOString(),
     };
     setHistory(prev => [pendingEntry, ...prev]);
     try {
-      const { promise, abort } = submitQueryStream(message, specs, (event) => {
+      const { promise, abort } = submitQueryStream(message, agentMode, confidenceThreshold, (event) => {
         setStageStatuses(prev => ({ ...prev, [event.stage]: event }));
         // Track timing: duration = time since last stage event
         const now = Date.now();
@@ -887,7 +888,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
           setStageTimes(prev => ({ ...prev, [lastKey]: now - lastTime }));
         }
         stageTimestamps.current[event.stage] = now;
-      });
+      }, undefined, slotConfigs);
       abortRef.current = abort;
       const res = await promise;
       // Capture final stage duration
@@ -1056,19 +1057,33 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             <div className="config-collapsible">
               <SlotBuilder slots={slotConfigs} onChange={setSlotConfigs} capacity={graphCapacity} groupedModels={groupedModels} />
               <div className="query-controls-bottom">
-                <select className="baseline-select" value={baseline} onChange={e => setBaseline(e.target.value)}>
-                  {Object.entries(groupedModels).map(([group, models]) => (
-                    [
-                      <option key={`bl-hdr-${group}`} disabled>── {group} ──</option>,
-                      ...models.flatMap(m => [
-                        <option key={`${m.display_name}_neuron`} value={`${m.display_name}_neuron`}>Baseline: {m.display_name} + Neurons</option>,
-                        <option key={`${m.display_name}_raw`} value={`${m.display_name}_raw`}>Baseline: {m.display_name} Raw</option>,
-                      ]),
-                    ]
-                  ))}
-                </select>
-                <button className="btn" onClick={handleSubmit} disabled={loading || !message.trim() || slotConfigs.length === 0}>
-                  {loading ? 'Processing...' : `Submit (${slotConfigs.length} slot${slotConfigs.length !== 1 ? 's' : ''})`}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input
+                      type="checkbox"
+                      checked={agentMode}
+                      onChange={(e) => setAgentMode(e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span>Agent Orchestration</span>
+                  </label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                    <label style={{ whiteSpace: 'nowrap', fontSize: '0.9rem', color: 'var(--text-dim)' }}>
+                      Confidence θ: {confidenceThreshold.toFixed(2)}
+                    </label>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="1.0"
+                      step="0.05"
+                      value={confidenceThreshold}
+                      onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
+                      style={{ flex: 1, minWidth: '100px', cursor: 'pointer' }}
+                    />
+                  </div>
+                </div>
+                <button className="btn" onClick={handleSubmit} disabled={loading || !message.trim()}>
+                  {loading ? 'Processing...' : 'Submit'}
                 </button>
               </div>
             </div>

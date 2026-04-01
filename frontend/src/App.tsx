@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import Explorer from './components/Explorer'
 import Dashboard from './components/Dashboard'
 import QueryLab from './components/QueryLab'
+import NeuronConfidencePage from './components/NeuronConfidencePage'
 import EvaluationPage from './components/EvaluationPage'
 import RefinementHistory from './components/RefinementHistory'
 import AutopilotPage from './components/AutopilotPage'
@@ -25,7 +26,7 @@ import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 import { checkAccess, setAccessKey, getAccessKey } from './auth'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'neuron-confidence' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -63,6 +64,7 @@ function buildNavGroups(tenantId: string | undefined): { label: string; items: N
       label: 'Workbench',
       items: [
         { key: 'query', label: 'Query Lab' },
+        { key: 'neuron-confidence', label: 'Neuron Confidence' },
         { key: 'samples', label: 'Samples' },
         { key: 'autopilot', label: 'Autopilot' },
         { key: 'refinements', label: 'Refinements' },
@@ -333,6 +335,7 @@ export default function App() {
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'layer-heatmap' && <LayerHeatmap />}
         <div style={{ display: tab === 'query' ? 'contents' : 'none' }}><QueryLab onNavigateToNeuron={navigateToNeuron} /></div>
+        {tab === 'neuron-confidence' && <NeuronConfidencePage />}
         {tab === 'evaluation' && <EvaluationPage />}
         {tab === 'refinements' && <RefinementHistory />}
         {tab === 'samples' && <SampleQueries />}

@@ -16,6 +16,7 @@ from app.schemas import (
     RefineRequest, RefineResponse, NeuronUpdateSuggestion, NewNeuronSuggestion,
     ApplyRefineRequest, ApplyRefineResponse, RefinementOut,
     LearningEventOut, LearningAnalytics,
+    SlotResult,  # For backward-compat: parsing legacy multi-slot query data
 )
 from app.services.executor import execute_query, prepare_context
 from app.services.claude_cli import claude_chat as llm_chat, estimate_cost, MODEL_REGISTRY
@@ -391,10 +392,14 @@ async def post_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
         )
 
     try:
+        # Convert QuerySlotRequest list to dict list for executor
+        slot_dicts = None
+        if req.slots:
+            slot_dicts = [s.model_dump() for s in req.slots]
+
         result = await execute_query(
             db, req.message,
-            agent_mode=req.agent_mode,
-            confidence_threshold=req.confidence_threshold,
+            slots=slot_dicts,
             prior_neuron_ids=req.prior_neuron_ids,
         )
     except HTTPException:
@@ -449,11 +454,15 @@ async def post_query_stream(req: QueryRequest, db: AsyncSession = Depends(get_db
                 await queue.put({"event": "error", "data": {"message": "Input blocked by safety filter"}})
                 return
 
-            # Execute pipeline with stage callbacks (Session 3 unified path)
+            # Execute pipeline with stage callbacks (Session 3+ multi-slot path)
+            # Convert QuerySlotRequest list to dict list for executor
+            slot_dicts = None
+            if req.slots:
+                slot_dicts = [s.model_dump() for s in req.slots]
+
             result = await execute_query(
                 db, req.message,
-                agent_mode=req.agent_mode,
-                confidence_threshold=req.confidence_threshold,
+                slots=slot_dicts,
                 on_stage=on_stage,
                 prior_neuron_ids=req.prior_neuron_ids,
             )

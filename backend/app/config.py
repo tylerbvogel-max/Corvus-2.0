@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     agent_max_domains: int = 8
     agent_verification_enabled: bool = False
     agent_verification_threshold: float = 0.6
-    agent_timeout_seconds: int = 30
+    agent_timeout_seconds: int = 90
     agent_confidence_threshold: float = 0.5
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

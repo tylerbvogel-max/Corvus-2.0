@@ -11,10 +11,18 @@ class QuerySlotRequest(BaseModel):
     label: str | None = None
 
 
+class QuerySlotRequest(BaseModel):
+    mode: str = Field(..., min_length=1)  # e.g. "haiku_neuron", "sonnet_raw", "opus_neuron"
+    token_budget: int = Field(8000, ge=1000, le=32000)
+    top_k: int = Field(60, ge=1, le=500)
+    agent_mode: bool = True  # Per-slot control: agent orchestration or direct call
+    confidence_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    label: str | None = None
+
+
 class QueryRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000)
-    agent_mode: bool = True
-    confidence_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    slots: list[QuerySlotRequest] | None = None  # Multi-slot testing; if None, use default single slot
     prior_neuron_ids: list[int] | None = None
 
 
@@ -29,6 +37,7 @@ class SlotResult(BaseModel):
     token_budget: int | None = None
     top_k: int | None = None
     label: str | None = None
+    agent_mode: bool = False  # Whether this slot used agent orchestration
 
 
 class NeuronScoreResponse(BaseModel):

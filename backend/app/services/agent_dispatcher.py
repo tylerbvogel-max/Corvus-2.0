@@ -177,8 +177,21 @@ def _parse_agent_response(
     domain_display: str, neurons: list, response: dict, start_time: float,
 ) -> AgentResult:
     """Parse agent JSON response with error handling (JPL-4: keep _dispatch_single_agent under 100 lines)."""
+    # Strip markdown code blocks if LLM wrapped response in ```json...```
+    # Also handle trailing text after closing backticks
+    json_text = text.strip()
+    if json_text.startswith("```json"):
+        json_text = json_text[7:].lstrip("\n")
+        # Find closing backticks and take only what's before them
+        if "```" in json_text:
+            json_text = json_text[:json_text.index("```")].rstrip()
+    elif json_text.startswith("```"):
+        json_text = json_text[3:].lstrip("\n")
+        if "```" in json_text:
+            json_text = json_text[:json_text.index("```")].rstrip()
+
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(json_text)
     except json.JSONDecodeError as e:
         return AgentResult(
             domain_key=domain_key,
