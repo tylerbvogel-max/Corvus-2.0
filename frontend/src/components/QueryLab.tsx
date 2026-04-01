@@ -879,6 +879,18 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
     try {
       const { promise, abort } = submitQueryStream(message, agentMode, confidenceThreshold, (event) => {
         setStageStatuses(prev => ({ ...prev, [event.stage]: event }));
+
+        // Track per-slot completion: remove slot from loading set when it finishes
+        if (event.stage === 'execute_llm' && event.detail?.slot_index !== undefined) {
+          if (event.status === 'done' || event.status === 'error') {
+            setSlotLoadingSet(prev => {
+              const next = new Set(prev);
+              next.delete(event.detail.slot_index as number);
+              return next;
+            });
+          }
+        }
+
         // Track timing: duration = time since last stage event
         const now = Date.now();
         const keys = Object.keys(stageTimestamps.current);

@@ -890,6 +890,7 @@ async def _update_counters_and_fire(
 async def _execute_slot(
     db: AsyncSession,
     slot: dict,
+    slot_index: int,
     user_message: str,
     ctx: PreparedContext | None,
     on_stage: StageCallback = None,
@@ -897,6 +898,7 @@ async def _execute_slot(
     """Execute a single slot with its own agent_mode and model configuration.
 
     Returns SlotResult dict with response, tokens, cost, error info.
+    Emits per-slot completion events via on_stage callback.
     """
     mode = slot.get("mode", "haiku_neuron")
     token_budget = slot.get("token_budget", settings.token_budget)
@@ -944,7 +946,7 @@ async def _execute_slot(
 
         duration_ms = round((time.monotonic() - start_time) * 1000)
 
-        return {
+        result = {
             "mode": mode,
             "model": model_name,
             "neurons": uses_neurons,
@@ -957,9 +959,23 @@ async def _execute_slot(
             "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
             "agent_mode": agent_mode,
         }
+
+        # Emit per-slot completion event
+        if on_stage:
+            await on_stage("execute_llm", {"status": "done", "detail": {
+                "slot_index": slot_index,
+                "mode": mode,
+                "model": model_name,
+                "duration_ms": duration_ms,
+                "output_tokens": output_tokens,
+            }})
+
+        return result
     except Exception as e:
         duration_ms = round((time.monotonic() - start_time) * 1000)
-        return {
+        error_msg = str(e)[:200]
+
+        result = {
             "mode": mode,
             "model": model_name,
             "neurons": uses_neurons,
@@ -972,8 +988,18 @@ async def _execute_slot(
             "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
             "agent_mode": agent_mode,
             "error": True,
-            "error_message": str(e)[:200],
+            "error_message": error_msg,
         }
+
+        # Emit per-slot error event
+        if on_stage:
+            await on_stage("execute_llm", {"status": "error", "detail": {
+                "slot_index": slot_index,
+                "mode": mode,
+                "error": error_msg,
+            }})
+
+        return result
 
 
 def _eval_slot_label(mode: str, uses_neurons: bool, token_budget: int) -> str:
@@ -1037,10 +1063,11 @@ async def execute_query(
 
     # Execute each slot in parallel
     slot_tasks = []
-    for slot in slots:
+    for i, slot in enumerate(slots):
         task = _execute_slot(
             db=db,
             slot=slot,
+            slot_index=i,
             user_message=user_message,
             ctx=ctx,
             on_stage=on_stage,
