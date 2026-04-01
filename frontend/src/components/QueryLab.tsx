@@ -1104,22 +1104,60 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
         {error && <div className="error-msg">{error}</div>}
 
-        {/* Per-slot loading indicators */}
+        {/* Live pipeline progress during execution */}
         {loading && (
-          <div className="slot-loading-panel">
-            <div className="slot-loading-timer">{(elapsedMs / 1000).toFixed(1)}s</div>
-            {slotConfigs.map((sc, i) => {
-              const modeInfo = ALL_MODES.find(m => m.key === sc.mode);
-              const label = modeInfo?.label ?? sc.mode;
-              const done = !slotLoadingSet.has(i);
-              return (
-                <div key={sc.id} className={`slot-loading-item${done ? ' done' : ''}`}>
-                  {!done && <span className="slot-spinner" />}
-                  {done && <span className="slot-check">&#10003;</span>}
-                  <span className="slot-loading-label" style={{ color: sc.color }}>{label}</span>
-                </div>
-              );
-            })}
+          <div className="live-pipeline-container">
+            <div className="live-pipeline-header">
+              <h3 style={{ margin: 0 }}>Pipeline Progress</h3>
+              <div className="live-timer">{(elapsedMs / 1000).toFixed(1)}s</div>
+            </div>
+            <div className="live-pipeline-stages">
+              {/* Define pipeline stages in order */}
+              {[
+                { key: 'input_guard', label: 'Input Guard' },
+                { key: 'embed_query', label: 'Embed Query' },
+                { key: 'classify', label: 'Classify' },
+                { key: 'semantic_prefilter', label: 'Semantic Filter' },
+                { key: 'score_neurons', label: 'Score Neurons' },
+                { key: 'spread_activation', label: 'Spread Activation' },
+                { key: 'assemble_prompt', label: 'Assemble Prompt' },
+                { key: 'execute_llm', label: 'Execute LLM' },
+                { key: 'output_checks', label: 'Output Checks' },
+              ].map((stage) => {
+                const isComplete = stage.key in stageStatuses;
+                const isExecuteLLM = stage.key === 'execute_llm';
+
+                return (
+                  <div key={stage.key} className={`live-stage ${isComplete ? 'complete' : 'pending'}`}>
+                    <div className="stage-marker">
+                      {isComplete ? (
+                        <span className="stage-check">&#10003;</span>
+                      ) : (
+                        <span className="stage-spinner" />
+                      )}
+                    </div>
+                    <div className="stage-label">{stage.label}</div>
+
+                    {/* Per-slot progress within execute_llm stage */}
+                    {isExecuteLLM && isComplete && (
+                      <div className="stage-slots">
+                        {slotConfigs.map((sc, i) => {
+                          const slotDone = !slotLoadingSet.has(i);
+                          const modeInfo = ALL_MODES.find(m => m.key === sc.mode);
+                          const modeLabel = modeInfo?.label ?? sc.mode;
+                          return (
+                            <div key={sc.id} className={`slot-badge ${slotDone ? 'done' : 'running'}`}>
+                              {slotDone ? <span style={{ color: '#22c55e' }}>✓</span> : <span className="tiny-spinner">⟳</span>}
+                              <span style={{ fontSize: '0.75rem' }}>{modeLabel}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
