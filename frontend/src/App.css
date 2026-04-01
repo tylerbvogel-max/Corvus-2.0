@@ -1523,6 +1523,15 @@ body {
 }
 
 /* Live pipeline progress during execution */
+.live-pipeline-wrapper {
+  position: relative;
+  padding: 24px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+
 .live-pipeline-container {
   display: flex;
   flex-direction: column;
@@ -4835,16 +4844,19 @@ details summary:hover { color: var(--text); }
 /* ────────── Pipeline Flow Layout (gutter + content grid) ────────── */
 
 .pipeline-flow {
-  display: grid;
-  grid-template-columns: 40px 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 0;
   position: relative;
 }
 
-/* SVG connector overlay spans the gutter column */
+/* SVG connector overlay — positioned absolutely over steps */
 .pipeline-flow > svg {
-  grid-column: 1;
-  grid-row: 1 / -1;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
   z-index: 1;
 }
@@ -4902,9 +4914,11 @@ details summary:hover { color: var(--text); }
   word-break: break-word;
 }
 
-/* The step wrapper is now a grid sub-row (2 cells) */
+/* The step wrapper creates its own grid for gutter + content */
 .pipeline-step {
-  display: contents;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 0;
 }
 
 .pipeline-step-label {
