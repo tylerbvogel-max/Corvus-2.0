@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import Explorer from './components/Explorer'
 import Dashboard from './components/Dashboard'
 import QueryLab from './components/QueryLab'
-import NeuronConfidencePage from './components/NeuronConfidencePage'
+// import NeuronConfidencePage from './components/NeuronConfidencePage' // TODO: incomplete, needs type fixes
 import EvaluationPage from './components/EvaluationPage'
 import RefinementHistory from './components/RefinementHistory'
 import AutopilotPage from './components/AutopilotPage'
@@ -335,7 +335,7 @@ export default function App() {
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'layer-heatmap' && <LayerHeatmap />}
         <div style={{ display: tab === 'query' ? 'contents' : 'none' }}><QueryLab onNavigateToNeuron={navigateToNeuron} /></div>
-        {tab === 'neuron-confidence' && <NeuronConfidencePage />}
+        {/* tab === 'neuron-confidence' && <NeuronConfidencePage /> */}
         {tab === 'evaluation' && <EvaluationPage />}
         {tab === 'refinements' && <RefinementHistory />}
         {tab === 'samples' && <SampleQueries />}

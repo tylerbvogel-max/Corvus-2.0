@@ -799,7 +799,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [refinePhase, setRefinePhase] = useState<RefinePhase>('idle');
   const [liveRefineRestore, setLiveRefineRestore] = useState<RefineResponse | null>(null);
-  const [/* stageStatuses */, setStageStatuses] = useState<Record<string, StageEvent>>({});
+  const [stageStatuses, setStageStatuses] = useState<Record<string, StageEvent>>({});
   const [stageTimes, setStageTimes] = useState<Record<string, number>>({});
   const stageTimestamps = useRef<Record<string, number>>({});
   const [configCollapsed, setConfigCollapsed] = useState(false);
@@ -881,11 +881,11 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
         setStageStatuses(prev => ({ ...prev, [event.stage]: event }));
 
         // Track per-slot completion: remove slot from loading set when it finishes
-        if (event.stage === 'execute_llm' && event.detail?.slot_index !== undefined) {
+        if (event.stage === 'execute_llm' && event.detail && 'slot_index' in event.detail && event.detail.slot_index !== undefined) {
           if (event.status === 'done' || event.status === 'error') {
             setSlotLoadingSet(prev => {
               const next = new Set(prev);
-              next.delete(event.detail.slot_index as number);
+              next.delete(event.detail!.slot_index as number);
               return next;
             });
           }
