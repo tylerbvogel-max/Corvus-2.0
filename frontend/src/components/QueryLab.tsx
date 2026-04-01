@@ -777,7 +777,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [slotConfigs, setSlotConfigs] = useState<SlotConfig[]>([
     { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, topK: 60, maxOutputTokens: 4096, color: nextSlotColor() },
   ]);
-  const [baseline, setBaseline] = useState('opus_raw');
   const [graphCapacity, setGraphCapacity] = useState<GraphCapacity | null>(null);
   // Track which slot indices are still loading (for per-slot spinners)
   const [slotLoadingSet, setSlotLoadingSet] = useState<Set<number>>(new Set());
@@ -832,6 +831,8 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       token_budget: sc.tokenBudget,
       top_k: sc.topK,
       max_output_tokens: sc.maxOutputTokens,
+      agent_mode: agentMode,
+      confidence_threshold: confidenceThreshold,
     }));
   }
 
@@ -882,7 +883,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
         // Track per-slot completion: remove slot from loading set when it finishes
         if (event.stage === 'execute_llm' && event.detail && 'slot_index' in event.detail && event.detail.slot_index !== undefined) {
-          if (event.status === 'done' || event.status === 'error') {
+          if (event.status === 'done') {
             setSlotLoadingSet(prev => {
               const next = new Set(prev);
               next.delete(event.detail!.slot_index as number);
@@ -900,7 +901,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
           setStageTimes(prev => ({ ...prev, [lastKey]: now - lastTime }));
         }
         stageTimestamps.current[event.stage] = now;
-      }, undefined, slotConfigs);
+      }, undefined, buildSlotSpecs());
       abortRef.current = abort;
       const res = await promise;
       // Capture final stage duration
@@ -1104,66 +1105,67 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
         {error && <div className="error-msg">{error}</div>}
 
-        {/* Live pipeline progress during execution */}
+        {/* Live pipeline with animated gutter dots during execution */}
         {loading && (
-          <div className="live-pipeline-container">
-            <div className="live-pipeline-header">
-              <h3 style={{ margin: 0 }}>Pipeline Progress</h3>
-              <div className="live-timer">{(elapsedMs / 1000).toFixed(1)}s</div>
+          <div className="live-pipeline-wrapper" style={{ marginBottom: '24px' }}>
+            <div style={{ position: 'absolute', top: '20px', right: '20px', fontFamily: 'JetBrains Mono', fontSize: '1.2rem', fontWeight: 700, color: 'var(--accent)' }}>
+              {(elapsedMs / 1000).toFixed(1)}s
             </div>
-            <div className="live-pipeline-stages">
-              {/* Define pipeline stages in order */}
-              {[
-                { key: 'input_guard', label: 'Input Guard' },
-                { key: 'embed_query', label: 'Embed Query' },
-                { key: 'classify', label: 'Classify' },
-                { key: 'semantic_prefilter', label: 'Semantic Filter' },
-                { key: 'score_neurons', label: 'Score Neurons' },
-                { key: 'spread_activation', label: 'Spread Activation' },
-                { key: 'assemble_prompt', label: 'Assemble Prompt' },
-                { key: 'execute_llm', label: 'Execute LLM' },
-                { key: 'output_checks', label: 'Output Checks' },
-              ].map((stage) => {
-                const isComplete = stage.key in stageStatuses;
-                const isExecuteLLM = stage.key === 'execute_llm';
 
-                return (
-                  <div key={stage.key} className={`live-stage ${isComplete ? 'complete' : 'pending'}`}>
-                    <div className="stage-marker">
-                      {isComplete ? (
-                        <span className="stage-check">&#10003;</span>
-                      ) : (
-                        <span className="stage-spinner" />
-                      )}
-                    </div>
-                    <div className="stage-label">{stage.label}</div>
+            {/* Pipeline stages with animated dots */}
+            {[
+              { key: 'input_guard', label: 'Input Guard' },
+              { key: 'embed_query', label: 'Embed Query' },
+              { key: 'classify', label: 'Classify' },
+              { key: 'semantic_prefilter', label: 'Semantic Filter' },
+              { key: 'score_neurons', label: 'Score Neurons' },
+              { key: 'spread_activation', label: 'Spread Activation' },
+              { key: 'assemble_prompt', label: 'Assemble Prompt' },
+              { key: 'execute_llm', label: 'Execute LLM' },
+              { key: 'output_checks', label: 'Output Checks' },
+            ].map((stage) => {
+              const isComplete = stage.key in stageStatuses;
+              const isExecuteLLM = stage.key === 'execute_llm';
+              const stepStatus = isComplete ? 'done' : 'pending';
 
-                    {/* Per-slot progress within execute_llm stage */}
+              return (
+                <PStep key={stage.key} status={stepStatus}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div className="pipeline-step-label">{stage.label}</div>
+
+                    {/* Per-slot badges within execute_llm stage */}
                     {isExecuteLLM && isComplete && (
-                      <div className="stage-slots">
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         {slotConfigs.map((sc, i) => {
                           const slotDone = !slotLoadingSet.has(i);
                           const modeInfo = ALL_MODES.find(m => m.key === sc.mode);
-                          const modeLabel = modeInfo?.label ?? sc.mode;
+                          const modeLabel = modeInfo?.short ?? sc.mode.slice(0, 3).toUpperCase();
                           return (
-                            <div key={sc.id} className={`slot-badge ${slotDone ? 'done' : 'running'}`}>
-                              {slotDone ? <span style={{ color: '#22c55e' }}>✓</span> : <span className="tiny-spinner">⟳</span>}
-                              <span style={{ fontSize: '0.75rem' }}>{modeLabel}</span>
-                            </div>
+                            <span key={sc.id} style={{
+                              fontSize: '0.7rem',
+                              padding: '3px 8px',
+                              background: slotDone ? 'rgba(34, 197, 94, 0.15)' : 'rgba(200, 117, 51, 0.15)',
+                              color: slotDone ? '#22c55e' : 'var(--accent)',
+                              borderRadius: '3px',
+                              border: `1px solid ${slotDone ? 'rgba(34, 197, 94, 0.3)' : 'rgba(200, 117, 51, 0.3)'}`,
+                              fontWeight: 600,
+                            }}>
+                              {slotDone ? '✓' : '⟳'} {modeLabel}
+                            </span>
                           );
                         })}
                       </div>
                     )}
                   </div>
-                );
-              })}
-            </div>
+                </PStep>
+              );
+            })}
           </div>
         )}
 
         {result && view === 'new' && (
           <LiveResult
-            result={result} baseline={baseline}
+            result={result}
             totalElapsedMs={elapsedMs}
             rating={rating} setRating={setRating} rated={rated} onRate={handleRate}
             evalText={evalText} evalMdl={evalMdl} evalIn={evalIn} evalOut={evalOut}
@@ -1178,7 +1180,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
           />
         )}
 
-        {selectedQuery && view === 'history' && <HistoryDetail query={selectedQuery} baseline={baseline} onNavigateToNeuron={onNavigateToNeuron} />}
+        {selectedQuery && view === 'history' && <HistoryDetail query={selectedQuery} onNavigateToNeuron={onNavigateToNeuron} />}
       </div>
     </div>
   );
@@ -1272,8 +1274,8 @@ function PipelineConnectors({ containerRef }: { containerRef: React.RefObject<HT
 
 // ────────── Live Result ──────────
 
-function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
-  result: QueryResponse; baseline: string; totalElapsedMs?: number;
+function LiveResult({ result, baseline = 'opus_raw', totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
+  result: QueryResponse; baseline?: string; totalElapsedMs?: number;
   rating: number; setRating: (v: number) => void; rated: boolean; onRate: () => void;
   evalText: string | null; evalMdl: string | null; evalIn: number; evalOut: number;
   evalScores: EvalScoreOut[]; evalWinner: string | null;
@@ -1482,7 +1484,7 @@ function LiveResult({ result, baseline, totalElapsedMs, rating, setRating, rated
 
 // ────────── History Detail ──────────
 
-function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDetail; baseline: string; onNavigateToNeuron?: (id: number) => void }) {
+function HistoryDetail({ query, baseline = 'opus_raw', onNavigateToNeuron }: { query: QueryDetail; baseline?: string; onNavigateToNeuron?: (id: number) => void }) {
   const { models: availableModels } = useModels();
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalModel, setEvalModel] = useState<string>('haiku');

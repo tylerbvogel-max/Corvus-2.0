@@ -8,7 +8,7 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
 import { fetchSpreadTrail } from '../api';
-import type { NeuronScoreResponse, SpreadTrailResponse, AgentResultOut } from '../types';
+import type { NeuronScoreResponse, SpreadTrailResponse } from '../types';
 import { DEPT_COLORS } from '../constants';
 
 // ────────── Constants ──────────
@@ -305,10 +305,9 @@ interface NeuronTreeVizProps {
   neuronScores: NeuronScoreResponse[];
   queryId?: number;
   onNavigateToNeuron?: (id: number) => void;
-  agentResults?: AgentResultOut[];
 }
 
-export default function NeuronTreeViz({ neuronScores, queryId, onNavigateToNeuron, agentResults }: NeuronTreeVizProps) {
+export default function NeuronTreeViz({ neuronScores, queryId, onNavigateToNeuron }: NeuronTreeVizProps) {
   const [trailData, setTrailData] = useState<SpreadTrailResponse | null>(null);
   const [ancestorData, setAncestorData] = useState<AncestorMap>(new Map());
   const [hoverNode, setHoverNode] = useState<TreeNodeData | null>(null);

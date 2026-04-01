@@ -361,7 +361,7 @@ export function submitQueryStream(
         if (!eventType || !dataStr) continue;
         const parsed = JSON.parse(dataStr);
         if (eventType === 'stage') {
-          onStage(parsed as StageEvent);
+          if (onStage) onStage(parsed as StageEvent);
         } else if (eventType === 'result') {
           finalResult = parsed as QueryResponse;
         } else if (eventType === 'error') {

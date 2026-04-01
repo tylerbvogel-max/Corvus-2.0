@@ -175,10 +175,12 @@ export default function HomePage({ onNavigate }: { onNavigate: (tab: string) => 
 
         const slot: SlotSpec = { mode: `${model}_neuron`, token_budget: 8000, top_k: 60 };
         const { promise } = submitQueryStream(
-          userMessage, [slot],
+          userMessage,
+          true,  // agent_mode
+          0.5,  // confidence_threshold
           (event: StageEvent) => setPipelineStages(prev => ({ ...prev, [event.stage]: event })),
-          'conversational',
           priorNeuronIds.length > 0 ? priorNeuronIds : undefined,
+          [slot],
         );
         const res = await promise;
         const slotResult = res.slots[0];
