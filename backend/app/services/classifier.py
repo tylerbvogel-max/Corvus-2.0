@@ -3,7 +3,7 @@
 import json
 import logging
 
-from app.services.llm_provider import llm_chat
+from app.services.claude_cli import claude_chat as llm_chat
 from app.tenant import tenant
 
 logger = logging.getLogger(__name__)

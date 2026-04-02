@@ -9,7 +9,7 @@ import asyncio
 import time
 from app.services.agent_dispatcher import AgentResult, AgentExecution, VerificationResult, _dispatch_verification_agent
 from app.services.agent_templates import build_coordinator_prompt
-from app.services.llm_provider import llm_chat as claude_chat
+from app.services.claude_cli import claude_chat
 from app.config import settings
 
 
