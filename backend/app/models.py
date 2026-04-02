@@ -40,6 +40,8 @@ class Neuron(Base):
     embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Denormalized from highest-authority linked source document
     authority_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Reverse link to the proposal item that created this neuron (if any)
+    proposal_item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("proposal_items.id"), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -251,6 +253,7 @@ class AutopilotRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     query_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("queries.id"), nullable=True)
+    proposal_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("autopilot_proposals.id"), nullable=True)
     generated_query: Mapped[str] = mapped_column(Text, nullable=False)
     directive: Mapped[str] = mapped_column(Text, nullable=False)
     focus_neuron_label: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -268,6 +271,64 @@ class AutopilotRun(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
+
+
+class AutopilotProposal(Base):
+    """Staged autopilot proposal with full provenance chain.
+
+    State machine: proposed → approved → applied
+                   proposed → rejected
+    """
+    __tablename__ = "autopilot_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    autopilot_run_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("autopilot_runs.id"), nullable=True, index=True)
+    query_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("queries.id"), nullable=True, index=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="proposed", server_default="proposed")
+    # Gap provenance
+    gap_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    gap_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gap_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # Serialized list[GapEvidence]
+    priority_score: Mapped[float] = mapped_column(Float, default=0.0)
+    # LLM provenance
+    llm_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    prompt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)  # SHA-256
+    # Eval context
+    eval_overall: Mapped[int] = mapped_column(Integer, default=0)
+    eval_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Approval provenance
+    reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reviewed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Timestamps
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    items: Mapped[list["ProposalItem"]] = relationship("ProposalItem", back_populates="proposal", lazy="selectin")
+
+
+class ProposalItem(Base):
+    """Individual mutation within a proposal (update or create)."""
+    __tablename__ = "proposal_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    proposal_id: Mapped[int] = mapped_column(Integer, ForeignKey("autopilot_proposals.id"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)  # "update" | "create"
+    target_neuron_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    field: Mapped[str | None] = mapped_column(String(50), nullable=True)  # For updates: content/summary/label/is_active
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    neuron_spec_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # For creates: full neuron spec
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # After application
+    created_neuron_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neurons.id"), nullable=True)
+    refinement_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("neuron_refinements.id"), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    proposal: Mapped["AutopilotProposal"] = relationship("AutopilotProposal", back_populates="items")
 
 
 class PropagationLog(Base):

@@ -110,6 +110,27 @@ interface EnhancedSlotConfig {
   tokenBudget: number;
   maxOutputTokens: number;
   color: string;
+  isBaseline: boolean;
+}
+
+/** Model tier for baseline fallback: highest tier wins. */
+const MODEL_TIER: Record<string, number> = { haiku: 1, sonnet: 2, opus: 3 };
+
+function resolveBaselineId(slots: EnhancedSlotConfig[]): number | null {
+  if (slots.length === 0) return null;
+  const explicit = slots.find(s => s.isBaseline);
+  if (explicit) return explicit.id;
+  // Default: first raw slot
+  const firstRaw = slots.find(s => s.mode.endsWith('_raw'));
+  if (firstRaw) return firstRaw.id;
+  // No raw slots: pick highest-tier model
+  let best = slots[0];
+  for (const s of slots) {
+    const model = s.mode.split('_')[0];
+    const bestModel = best.mode.split('_')[0];
+    if ((MODEL_TIER[model] ?? 0) > (MODEL_TIER[bestModel] ?? 0)) best = s;
+  }
+  return best.id;
 }
 
 function scoreColor(val: number): string {
@@ -190,8 +211,10 @@ interface ModelCardProps {
   slot: EnhancedSlotConfig;
   slotResult: SlotResult | null;
   isLoading: boolean;
+  isBaseline: boolean;
   onUpdate: (patch: Partial<EnhancedSlotConfig>) => void;
   onRemove: () => void;
+  onSetBaseline: () => void;
   allModes: { key: string; label: string; short: string }[];
   modeColors: Record<string, string>;
 }
@@ -200,8 +223,10 @@ function ModelCard({
   slot,
   slotResult,
   isLoading,
+  isBaseline,
   onUpdate,
   onRemove,
+  onSetBaseline,
   allModes,
   modeColors,
 }: ModelCardProps) {
@@ -264,6 +289,15 @@ function ModelCard({
             ))}
           </select>
         </div>
+        <label className="baseline-toggle" title="Set as cost baseline">
+          <input
+            type="radio"
+            checked={isBaseline}
+            onChange={onSetBaseline}
+            disabled={isLoading}
+          />
+          <span className="baseline-label">Baseline</span>
+        </label>
         <button className="card-remove" onClick={onRemove} disabled={isLoading} title="Remove slot">
           ✕
         </button>
@@ -344,8 +378,10 @@ interface ModelCardGridProps {
   slots: EnhancedSlotConfig[];
   results: Record<number, SlotResult | null>;
   loadingSlots: Set<number>;
+  baselineSlotId: number | null;
   onUpdateSlot: (slotId: number, patch: Partial<EnhancedSlotConfig>) => void;
   onRemoveSlot: (slotId: number) => void;
+  onSetBaseline: (slotId: number) => void;
   onAddSlot: () => void;
   allModes: { key: string; label: string; short: string }[];
   modeColors: Record<string, string>;
@@ -355,8 +391,10 @@ function ModelCardGrid({
   slots,
   results,
   loadingSlots,
+  baselineSlotId,
   onUpdateSlot,
   onRemoveSlot,
+  onSetBaseline,
   onAddSlot,
   allModes,
   modeColors,
@@ -369,8 +407,10 @@ function ModelCardGrid({
           slot={slot}
           slotResult={results[slot.id] ?? null}
           isLoading={loadingSlots.has(slot.id)}
+          isBaseline={slot.id === baselineSlotId}
           onUpdate={patch => onUpdateSlot(slot.id, patch)}
           onRemove={() => onRemoveSlot(slot.id)}
+          onSetBaseline={() => onSetBaseline(slot.id)}
           allModes={allModes}
           modeColors={modeColors}
         />
@@ -389,61 +429,6 @@ function ModelCardGrid({
   );
 }
 
-
-// ────────── Graph Health Panel (new left panel tab) ──────────
-
-interface GraphHealthPanelProps {
-  graphCapacity: GraphCapacity | null;
-  history: QuerySummary[];
-}
-
-function GraphHealthPanel({
-  graphCapacity,
-  history,
-}: GraphHealthPanelProps) {
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const [capacityRes] = await Promise.all([
-          fetch('/api/neurons/capacity').then(r => r.json()),
-        ]);
-        setStats(capacityRes);
-      } catch {
-        // ignore
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
-
-  if (loading) {
-    return <div className="graph-health-panel">Loading...</div>;
-  }
-
-  const neuronCount = stats?.active_neurons ?? graphCapacity?.active_neurons ?? 0;
-  const totalTokens = stats?.total_tokens ?? graphCapacity?.total_tokens ?? 0;
-
-  return (
-    <div className="graph-health-panel">
-      <div className="health-stat">
-        <div className="stat-label">Active Neurons</div>
-        <div className="stat-value">{neuronCount.toLocaleString()}</div>
-      </div>
-      <div className="health-stat">
-        <div className="stat-label">Queries Run</div>
-        <div className="stat-value">{history.length}</div>
-      </div>
-      <div className="health-stat">
-        <div className="stat-label">Total Tokens</div>
-        <div className="stat-value">{(totalTokens / 1000).toFixed(0)}K</div>
-      </div>
-    </div>
-  );
-}
 
 type RefinePhase = 'idle' | 'ready' | 'loading' | 'has-suggestions' | 'applying' | 'applied';
 
@@ -711,8 +696,13 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
 
   // Slot configurations
   const [slotConfigs, setSlotConfigs] = useState<EnhancedSlotConfig[]>([
-    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, maxOutputTokens: 4096, color: nextSlotColor() },
+    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, maxOutputTokens: 4096, color: nextSlotColor(), isBaseline: false },
   ]);
+  const baselineSlotId = useMemo(() => resolveBaselineId(slotConfigs), [slotConfigs]);
+  const baselineMode = useMemo(() => {
+    const slot = slotConfigs.find(s => s.id === baselineSlotId);
+    return slot?.mode ?? 'haiku_neuron';
+  }, [slotConfigs, baselineSlotId]);
   // For backward compatibility: keep a mapping of slot results by ID
   const [slotResults, setSlotResults] = useState<Record<number, SlotResult | null>>({});
 
@@ -735,7 +725,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const [view, setView] = useState<'new' | 'history'>('new');
 
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
-  const [leftPanelTab, setLeftPanelTab] = useState<'history' | 'health'>('history');
   const [refinePhase, setRefinePhase] = useState<RefinePhase>('idle');
   const [liveRefineRestore, setLiveRefineRestore] = useState<RefineResponse | null>(null);
   const [stageStatuses, setStageStatuses] = useState<Record<string, StageEvent>>({});
@@ -949,6 +938,10 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   }
 
   // Slot management functions
+  function setBaseline(slotId: number) {
+    setSlotConfigs(prev => prev.map(s => ({ ...s, isBaseline: s.id === slotId })));
+  }
+
   function addSlot(mode: string) {
     setSlotConfigs(prev => [...prev, {
       id: nextSlotId++,
@@ -956,6 +949,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       tokenBudget: 8000,
       maxOutputTokens: 4096,
       color: nextSlotColor(),
+      isBaseline: false,
     }]);
   }
 
@@ -988,20 +982,9 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
         <h3 style={{ display: 'flex', alignItems: 'flex-end', gap: 6, paddingBottom: 6 }}>
           <span onClick={() => setHistoryCollapsed(c => !c)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
             <span className="sidebar-toggle" style={{ padding: 2 }}>{historyCollapsed ? '\u25B6' : '\u25C0'}</span>
-            {!historyCollapsed && (
-              <div className="panel-tabs">
-                <button
-                  className={`panel-tab${leftPanelTab === 'history' ? ' active' : ''}`}
-                  onClick={() => setLeftPanelTab('history')}
-                >History</button>
-                <button
-                  className={`panel-tab${leftPanelTab === 'health' ? ' active' : ''}`}
-                  onClick={() => setLeftPanelTab('health')}
-                >Graph Health</button>
-              </div>
-            )}
+            {!historyCollapsed && <span>History</span>}
           </span>
-          {!historyCollapsed && leftPanelTab === 'history' && (
+          {!historyCollapsed && (
             <button
               className="btn btn-sm"
               title="New query"
@@ -1010,7 +993,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             >+</button>
           )}
         </h3>
-        {!historyCollapsed && leftPanelTab === 'history' && (
+        {!historyCollapsed && (
           <>
             {history.length === 0 && <div className="history-empty">No queries yet</div>}
             {history.map(q => {
@@ -1042,9 +1025,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             })}
           </>
         )}
-        {!historyCollapsed && leftPanelTab === 'health' && (
-          <GraphHealthPanel graphCapacity={graphCapacity} history={history} />
-        )}
       </div>
 
       <div className="query-main">
@@ -1065,8 +1045,10 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
                 slots={slotConfigs}
                 results={slotResults}
                 loadingSlots={slotLoadingSet}
+                baselineSlotId={baselineSlotId}
                 onUpdateSlot={updateSlot}
                 onRemoveSlot={removeSlot}
+                onSetBaseline={setBaseline}
                 onAddSlot={() => addSlot('haiku_neuron')}
                 allModes={ALL_MODES}
                 modeColors={MODE_COLORS}
@@ -1119,10 +1101,11 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
             initialRefineResult={liveRefineRestore}
             onNavigateToNeuron={onNavigateToNeuron}
             stageTimes={stageTimes}
+            baseline={baselineMode}
           />
         )}
 
-        {selectedQuery && view === 'history' && <HistoryDetail query={selectedQuery} onNavigateToNeuron={onNavigateToNeuron} />}
+        {selectedQuery && view === 'history' && <HistoryDetail query={selectedQuery} baseline={baselineMode} onNavigateToNeuron={onNavigateToNeuron} />}
       </div>
     </div>
   );
@@ -1216,10 +1199,10 @@ function PipelineConnectors({ containerRef }: { containerRef: React.RefObject<HT
 
 // ────────── Live Result ──────────
 
-function LiveResult({ result, loading, message, stageStatuses, slotLoadingSet, slotConfigs, baseline = 'opus_raw', totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
+function LiveResult({ result, loading, message, stageStatuses, slotLoadingSet, slotConfigs, baseline, totalElapsedMs, rating, setRating, rated, onRate, evalText, evalMdl, evalIn, evalOut, evalScores, evalWinner, evalLearning, evalModel, setEvalModel, evalLoading, onEval, onRunAgain, onRefinePhaseChange, initialRefineResult, onNavigateToNeuron, stageTimes }: {
   result: QueryResponse | null; loading: boolean; message: string;
   stageStatuses: Record<string, StageEvent>; slotLoadingSet: Set<number>; slotConfigs: EnhancedSlotConfig[];
-  baseline?: string; totalElapsedMs?: number;
+  baseline: string; totalElapsedMs?: number;
   rating: number; setRating: (v: number) => void; rated: boolean; onRate: () => void;
   evalText: string | null; evalMdl: string | null; evalIn: number; evalOut: number;
   evalScores: EvalScoreOut[]; evalWinner: string | null;
@@ -1530,7 +1513,7 @@ function LiveResult({ result, loading, message, stageStatuses, slotLoadingSet, s
 
 // ────────── History Detail ──────────
 
-function HistoryDetail({ query, baseline = 'opus_raw', onNavigateToNeuron }: { query: QueryDetail; baseline?: string; onNavigateToNeuron?: (id: number) => void }) {
+function HistoryDetail({ query, baseline, onNavigateToNeuron }: { query: QueryDetail; baseline: string; onNavigateToNeuron?: (id: number) => void }) {
   const { models: availableModels } = useModels();
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalModel, setEvalModel] = useState<string>('sonnet');

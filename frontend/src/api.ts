@@ -1507,3 +1507,111 @@ export function runComplianceSuite(
     }
   });
 }
+
+
+// ── Proposal Queue ──────────────────────────────────────────────────
+
+export interface ProposalSummary {
+  id: number;
+  autopilot_run_id: number | null;
+  query_id: number | null;
+  state: string;
+  gap_source: string | null;
+  gap_description: string | null;
+  priority_score: number;
+  llm_model: string | null;
+  eval_overall: number;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  applied_at: string | null;
+  applied_by: string | null;
+  item_count: number;
+  created_at: string | null;
+}
+
+export interface GapEvidence {
+  signal: string;
+  description: string;
+  metric_value: number;
+  threshold: number;
+  neuron_ids: number[];
+  query_ids: number[];
+}
+
+export interface ProposalItem {
+  id: number;
+  action: string;
+  target_neuron_id: number | null;
+  field: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  neuron_spec_json: string | null;
+  reason: string | null;
+  created_neuron_id: number | null;
+  refinement_id: number | null;
+}
+
+export interface ProposalDetail {
+  id: number;
+  autopilot_run_id: number | null;
+  query_id: number | null;
+  state: string;
+  gap_source: string | null;
+  gap_description: string | null;
+  gap_evidence: GapEvidence[];
+  priority_score: number;
+  llm_reasoning: string | null;
+  llm_model: string | null;
+  prompt_hash: string | null;
+  eval_overall: number;
+  eval_text: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_notes: string | null;
+  applied_at: string | null;
+  applied_by: string | null;
+  items: ProposalItem[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ProposalStats {
+  proposed: number;
+  approved: number;
+  rejected: number;
+  applied: number;
+  total: number;
+}
+
+export function fetchProposals(state?: string): Promise<ProposalSummary[]> {
+  const params = state ? `?state=${state}` : '';
+  return json<ProposalSummary[]>(`/admin/proposals/${params}`);
+}
+
+export function fetchProposalDetail(id: number): Promise<ProposalDetail> {
+  return json<ProposalDetail>(`/admin/proposals/${id}`);
+}
+
+export function reviewProposal(id: number, action: 'approve' | 'reject', reviewer: string, notes: string = ''): Promise<ProposalDetail> {
+  return json<ProposalDetail>(`/admin/proposals/${id}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, reviewer, notes }),
+  });
+}
+
+export function applyProposal(id: number, appliedBy: string): Promise<ProposalDetail> {
+  return json<ProposalDetail>(`/admin/proposals/${id}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ applied_by: appliedBy }),
+  });
+}
+
+export function fetchProposalStats(): Promise<ProposalStats> {
+  return json<ProposalStats>('/admin/proposals/stats');
+}
+
+export function fetchNeuronProvenance(neuronId: number): Promise<Record<string, unknown>> {
+  return json<Record<string, unknown>>(`/admin/neurons/${neuronId}/provenance`);
+}

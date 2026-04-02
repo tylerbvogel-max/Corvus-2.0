@@ -1,11 +1,14 @@
 """Autopilot — gap-driven autonomous neuron growth loop.
 
-Each tick: detect gap -> generate targeted query -> execute -> evaluate -> refine -> apply.
+Each tick: detect gap -> generate targeted query -> execute -> evaluate -> refine -> propose.
 Falls back to directive-based random queries when no gaps are found.
+All proposed changes are staged for human approval — nothing is auto-applied.
 """
 
+import hashlib
 import json
 import traceback
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
@@ -14,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
 from app.models import (
-    AutopilotConfig, AutopilotRun, Query, Neuron, EvalScore, NeuronRefinement,
+    AutopilotConfig, AutopilotRun, AutopilotProposal, ProposalItem,
+    Query, Neuron, EvalScore, NeuronRefinement,
     EmergentQueue,
 )
 from app.schemas import (
@@ -23,7 +27,7 @@ from app.schemas import (
 from app.services.executor import execute_query
 from app.services.claude_cli import claude_chat as llm_chat
 from app.services.neuron_service import get_system_state
-from app.services.gap_detector import detect_gap, GapTarget
+from app.services.gap_detector import detect_gap, detect_gaps_scored, GapTarget, ScoredGap
 
 router = APIRouter(prefix="/admin/autopilot", tags=["autopilot"])
 
@@ -33,7 +37,7 @@ _tick_running = False
 _current_step = ""
 _current_detail = ""
 
-TICK_STEPS = ("detect", "generate", "execute", "evaluate", "refine", "apply", "record")
+TICK_STEPS = ("detect", "generate", "execute", "evaluate", "refine", "propose", "record")
 
 
 def _set_step(step: str, detail: str = ""):
@@ -211,6 +215,7 @@ async def list_runs(db: AsyncSession = Depends(get_db)):
         AutopilotRunOut(
             id=r.id,
             query_id=r.query_id,
+            proposal_id=r.proposal_id,
             generated_query=r.generated_query,
             directive=r.directive,
             focus_neuron_label=r.focus_neuron_label,
@@ -283,13 +288,16 @@ def _reset_tick_state():
 
 async def _detect_and_gather_context(
     focus_neuron_id: int | None,
-) -> tuple[GapTarget | None, str | None, str, list[str], str, str]:
+) -> tuple[GapTarget | None, ScoredGap | None, str | None, str, list[str], str, str]:
     _set_step("detect", "Scanning for knowledge gaps...")
     focus_label = None
     focus_context = ""
 
     async with async_session() as s0:
-        gap = await detect_gap(s0, focus_neuron_id)
+        scored_gaps = await detect_gaps_scored(s0, focus_neuron_id, limit=1)
+        scored_gap = scored_gaps[0] if scored_gaps else None
+        gap = scored_gap.to_gap_target() if scored_gap else None
+
         if focus_neuron_id:
             focus_label, focus_context = await _get_subtree_context(s0, focus_neuron_id)
         recent_result = await s0.execute(
@@ -308,13 +316,13 @@ async def _detect_and_gather_context(
         gap_target_desc = "No structural gaps found — using directive for exploration"
         _set_step("detect", "No gaps found — falling back to directive-based query")
 
-    return gap, focus_label, focus_context, recent_queries, gap_source, gap_target_desc
+    return gap, scored_gap, focus_label, focus_context, recent_queries, gap_source, gap_target_desc
 
 
 async def _execute_pipeline(generated_query: str) -> tuple[int, int, float]:
     _set_step("execute", "Scoring and selecting candidate neurons...")
     async with async_session() as s2:
-        exec_result = await execute_query(s2, generated_query, modes=["haiku_neuron"])
+        exec_result = await execute_query(s2, generated_query)
         return exec_result["query_id"], exec_result["neurons_activated"], exec_result["total_cost"]
 
 
@@ -342,26 +350,68 @@ async def _refine_neurons(
         return reasoning, updates, new_neurons, refine_cost
 
 
-async def _apply_and_resolve(
-    query_id: int, updates: list[dict], new_neurons: list[dict],
-    gap: GapTarget | None,
-) -> tuple[int, int]:
+async def _create_proposal(
+    query_id: int,
+    updates: list[dict],
+    new_neurons: list[dict],
+    scored_gap: ScoredGap | None,
+    reasoning: str,
+    eval_overall: int,
+    eval_text: str,
+    llm_model: str,
+    assembled_prompt: str | None,
+) -> int:
+    """Stage proposed changes as an AutopilotProposal instead of auto-applying."""
     n_updates = len(updates) if updates else 0
     n_new = len(new_neurons) if new_neurons else 0
-    _set_step("apply", f"Applying {n_updates} updates and {n_new} new neurons...")
-    async with async_session() as s5:
-        query = await s5.get(Query, query_id)
-        updates_applied, neurons_created = await _apply_all(s5, query, updates, new_neurons)
+    _set_step("propose", f"Staging {n_updates} updates and {n_new} new neurons as proposal...")
 
-        if gap and gap.source == "emergent_queue" and gap.emergent_queue_id and neurons_created > 0:
-            eq_entry = await s5.get(EmergentQueue, gap.emergent_queue_id)
-            if eq_entry:
-                eq_entry.status = "resolved"
-                eq_entry.resolved_at = datetime.now(timezone.utc)
-                eq_entry.notes = f"Resolved by autopilot run (query #{query_id})"
+    # Serialize gap evidence
+    evidence_json = None
+    if scored_gap and scored_gap.evidence:
+        evidence_json = json.dumps([asdict(e) for e in scored_gap.evidence])
+
+    prompt_hash = hashlib.sha256(assembled_prompt.encode()).hexdigest() if assembled_prompt else None
+
+    async with async_session() as s5:
+        proposal = AutopilotProposal(
+            query_id=query_id,
+            state="proposed",
+            gap_source=scored_gap.source if scored_gap else "directive",
+            gap_description=scored_gap.description if scored_gap else None,
+            gap_evidence_json=evidence_json,
+            priority_score=scored_gap.priority_score if scored_gap else 0.0,
+            llm_reasoning=reasoning,
+            llm_model=llm_model,
+            prompt_hash=prompt_hash,
+            eval_overall=eval_overall,
+            eval_text=eval_text,
+        )
+        s5.add(proposal)
+        await s5.flush()
+
+        for u in (updates or []):
+            s5.add(ProposalItem(
+                proposal_id=proposal.id,
+                action="update",
+                target_neuron_id=u.get("neuron_id"),
+                field=u.get("field"),
+                old_value=str(u.get("old_value", "")),
+                new_value=str(u.get("new_value", "")),
+                reason=u.get("reason"),
+            ))
+
+        for n in (new_neurons or []):
+            s5.add(ProposalItem(
+                proposal_id=proposal.id,
+                action="create",
+                target_neuron_id=n.get("parent_id"),
+                neuron_spec_json=json.dumps(n),
+                reason=n.get("reason"),
+            ))
 
         await s5.commit()
-    return updates_applied, neurons_created
+        return proposal.id
 
 
 async def _record_run(status: str, **kwargs) -> AutopilotRun:
@@ -422,7 +472,7 @@ async def _run_tick(db: AsyncSession, config: AutopilotConfig) -> AutopilotTickR
     )
 
     try:
-        gap, focus_label, focus_ctx, recent_qs, gap_src, gap_desc = (
+        gap, scored_gap, focus_label, focus_ctx, recent_qs, gap_src, gap_desc = (
             await _detect_and_gather_context(config.focus_neuron_id)
         )
         run_fields.update(focus_neuron_label=focus_label, gap_source=gap_src, gap_target=gap_desc)
@@ -450,10 +500,39 @@ async def _run_tick(db: AsyncSession, config: AutopilotConfig) -> AutopilotTickR
         run_fields.update(refine_reasoning=reasoning)
         _check_cancel()
 
-        updates_applied, neurons_created = await _apply_and_resolve(query_id, updates, new_neurons, gap)
-        run_fields.update(updates_applied=updates_applied, neurons_created=neurons_created)
+        # Get assembled prompt for hash
+        assembled_prompt = None
+        async with async_session() as _sp:
+            q = await _sp.get(Query, query_id)
+            if q:
+                assembled_prompt = q.assembled_prompt
 
-        run = await _record_run("completed", generated_query=generated_query, cost_usd=total_cost, **run_fields)
+        proposal_id = await _create_proposal(
+            query_id=query_id,
+            updates=updates,
+            new_neurons=new_neurons,
+            scored_gap=scored_gap,
+            reasoning=reasoning,
+            eval_overall=eval_overall,
+            eval_text=eval_text,
+            llm_model=config.eval_model,
+            assembled_prompt=assembled_prompt,
+        )
+
+        # Record with 0 applied — changes happen at approval time
+        run_fields.update(updates_applied=0, neurons_created=0)
+        run = await _record_run(
+            "completed", generated_query=generated_query, cost_usd=total_cost,
+            proposal_id=proposal_id, **run_fields,
+        )
+
+        # Link proposal back to run
+        async with async_session() as _link:
+            prop = await _link.get(AutopilotProposal, proposal_id)
+            if prop:
+                prop.autopilot_run_id = run.id
+                await _link.commit()
+
         _reset_tick_state()
         return AutopilotTickResponse(status="completed", run_id=run.id)
 

@@ -381,6 +381,7 @@ class AutopilotConfigUpdate(BaseModel):
 class AutopilotRunOut(BaseModel):
     id: int
     query_id: int | None = None
+    proposal_id: int | None = None
     generated_query: str
     directive: str
     focus_neuron_label: str | None = None
@@ -402,6 +403,90 @@ class AutopilotTickResponse(BaseModel):
     status: str
     run_id: int | None = None
     message: str | None = None
+
+
+# ── Proposal schemas ──────────────────────────────────────────────────
+
+class GapEvidenceOut(BaseModel):
+    signal: str
+    description: str
+    metric_value: float
+    threshold: float
+    neuron_ids: list[int] = []
+    query_ids: list[int] = []
+
+
+class ProposalItemOut(BaseModel):
+    id: int
+    action: str
+    target_neuron_id: int | None = None
+    field: str | None = None
+    old_value: str | None = None
+    new_value: str | None = None
+    neuron_spec_json: str | None = None
+    reason: str | None = None
+    created_neuron_id: int | None = None
+    refinement_id: int | None = None
+
+
+class ProposalOut(BaseModel):
+    id: int
+    autopilot_run_id: int | None = None
+    query_id: int | None = None
+    state: str
+    gap_source: str | None = None
+    gap_description: str | None = None
+    priority_score: float = 0.0
+    llm_model: str | None = None
+    eval_overall: int = 0
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
+    applied_at: str | None = None
+    applied_by: str | None = None
+    item_count: int = 0
+    created_at: str | None = None
+
+
+class ProposalDetailOut(BaseModel):
+    id: int
+    autopilot_run_id: int | None = None
+    query_id: int | None = None
+    state: str
+    gap_source: str | None = None
+    gap_description: str | None = None
+    gap_evidence: list[GapEvidenceOut] = []
+    priority_score: float = 0.0
+    llm_reasoning: str | None = None
+    llm_model: str | None = None
+    prompt_hash: str | None = None
+    eval_overall: int = 0
+    eval_text: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
+    review_notes: str | None = None
+    applied_at: str | None = None
+    applied_by: str | None = None
+    items: list[ProposalItemOut] = []
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ProposalReviewRequest(BaseModel):
+    action: str = Field(..., pattern="^(approve|reject)$")
+    reviewer: str = Field(..., min_length=1, max_length=100)
+    notes: str = ""
+
+
+class ProposalApplyRequest(BaseModel):
+    applied_by: str = Field(..., min_length=1, max_length=100)
+
+
+class ProposalStatsOut(BaseModel):
+    proposed: int = 0
+    approved: int = 0
+    rejected: int = 0
+    applied: int = 0
+    total: int = 0
 
 
 class ObservationEvalRequest(BaseModel):

@@ -5095,6 +5095,22 @@ details summary:hover { color: var(--text); }
   cursor: pointer;
 }
 
+.baseline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+.baseline-toggle input[type="radio"] {
+  margin: 0;
+  cursor: pointer;
+}
+.baseline-toggle input[type="radio"]:checked + .baseline-label {
+  color: var(--accent, #60a5fa);
+}
+
 .card-remove {
   padding: 4px 8px;
   border: none;

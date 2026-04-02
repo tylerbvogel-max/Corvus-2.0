@@ -1,22 +1,31 @@
 """Gap detector — identifies knowledge gaps in the neuron graph.
 
-Priority order:
+Two modes:
+- detect_gap(): Original first-hit-wins heuristic (backward-compatible).
+- detect_gaps_scored(): Multi-signal scoring that runs ALL heuristics plus
+  eval-dimension, utilization, coverage, quality-trend, and staleness checks.
+  Returns ranked ScoredGap list with full evidence chains.
+
+Heuristic priority (for detect_gap):
 1. Emergent queue (unresolved external references detected in neurons)
 2. Low-eval queries (past queries where overall eval scored poorly)
 3. Thin neurons (active neurons with minimal content)
 4. Sparse subtrees (roles/tasks with fewer children than peers)
-
-Returns a GapTarget that autopilot uses to generate a targeted query.
+5. Emergent clusters (cross-department clusters without Task neuron)
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
+from datetime import datetime, timedelta
+from types import MappingProxyType
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EmergentQueue, Neuron, Query, EvalScore, AutopilotRun
 
+
+# ── Dataclasses ───────────────────────────────────────────────────────
 
 @dataclass
 class GapTarget:
@@ -27,38 +36,155 @@ class GapTarget:
     query_id: int | None = None  # For low_eval source
 
 
+@dataclass
+class GapEvidence:
+    """One piece of evidence supporting a detected gap."""
+    signal: str           # e.g. "low_eval_governance", "zero_hit_neuron", "coverage_gap"
+    description: str      # Human-readable explanation
+    metric_value: float   # The measured value that triggered this
+    threshold: float      # The threshold it was compared against
+    neuron_ids: list[int] = dc_field(default_factory=list)
+    query_ids: list[int] = dc_field(default_factory=list)
+
+
+@dataclass
+class ScoredGap:
+    """A gap with scored priority and full evidence chain."""
+    source: str            # Same vocabulary as GapTarget.source
+    description: str
+    context_neuron_ids: list[int]
+    evidence: list[GapEvidence]
+    priority_score: float  # Weighted composite 0.0–1.0
+    emergent_queue_id: int | None = None
+    query_id: int | None = None
+
+    def to_gap_target(self) -> GapTarget:
+        """Convert to legacy GapTarget for backward compatibility."""
+        return GapTarget(
+            source=self.source,
+            description=self.description,
+            context_neuron_ids=self.context_neuron_ids,
+            emergent_queue_id=self.emergent_queue_id,
+            query_id=self.query_id,
+        )
+
+
+# Scoring weights for priority calculation
+DEFAULT_WEIGHTS = MappingProxyType({
+    "severity": 0.4,
+    "breadth": 0.3,
+    "staleness": 0.2,
+    "source_authority": 0.1,
+})
+
+# Source authority ranking (higher = more authoritative gap source)
+SOURCE_AUTHORITY = MappingProxyType({
+    "emergent_queue": 0.9,    # External reference — regulatory risk
+    "stale_neuron": 0.8,      # Verification lapse — compliance risk
+    "low_eval": 0.7,          # Demonstrated failure
+    "eval_dimension": 0.6,    # Dimension-specific weakness
+    "quality_trend": 0.5,     # Declining performance
+    "thin_neuron": 0.4,       # Incomplete content
+    "zero_hit_neuron": 0.3,   # Unused content
+    "sparse_subtree": 0.3,    # Structural gap
+    "coverage_gap": 0.2,      # Imbalanced graph
+    "emergent_cluster": 0.2,  # Cross-department opportunity
+})
+
+
+# ── Legacy first-hit-wins API ─────────────────────────────────────────
+
 async def detect_gap(
     db: AsyncSession,
     focus_neuron_id: int | None = None,
 ) -> GapTarget | None:
-    """Find the highest-priority gap to fill. Returns None if no gaps found."""
+    """Find the highest-priority gap to fill. Returns None if no gaps found.
 
-    # 1. Emergent queue — unresolved references
-    target = await _check_emergent_queue(db, focus_neuron_id)
-    if target:
-        return target
-
-    # 2. Low-eval queries — past queries that scored poorly
-    target = await _check_low_eval_queries(db, focus_neuron_id)
-    if target:
-        return target
-
-    # 3. Thin neurons — active neurons with minimal content
-    target = await _check_thin_neurons(db, focus_neuron_id)
-    if target:
-        return target
-
-    # 4. Sparse subtrees — roles/tasks with few children
-    target = await _check_sparse_subtrees(db, focus_neuron_id)
-    if target:
-        return target
-
-    # 5. Emergent clusters — cross-department clusters without corresponding Task neuron
-    target = await _check_emergent_clusters(db, focus_neuron_id)
-    if target:
-        return target
-
+    Backward-compatible wrapper — uses detect_gaps_scored internally and
+    returns the top-scored gap as a GapTarget.
+    """
+    scored = await detect_gaps_scored(db, focus_neuron_id, limit=1)
+    if scored:
+        return scored[0].to_gap_target()
     return None
+
+
+# ── Scored multi-signal API ───────────────────────────────────────────
+
+async def detect_gaps_scored(
+    db: AsyncSession,
+    focus_neuron_id: int | None = None,
+    limit: int = 10,
+) -> list[ScoredGap]:
+    """Run all gap heuristics and return scored gaps sorted by priority.
+
+    Unlike detect_gap(), this runs every heuristic and new metric-based
+    checks, collecting evidence for each gap found.
+    """
+    gaps: list[ScoredGap] = []
+
+    # Existing heuristics (adapted to return ScoredGap)
+    gap = await _scored_emergent_queue(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_low_eval(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_thin_neurons(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_sparse_subtrees(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_emergent_clusters(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    # New metric-based checks
+    gap = await _scored_eval_dimensions(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_zero_hit_neurons(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_coverage_gap(db)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_quality_trend(db)
+    if gap:
+        gaps.append(gap)
+
+    gap = await _scored_stale_neurons(db, focus_neuron_id)
+    if gap:
+        gaps.append(gap)
+
+    gaps.sort(key=lambda g: g.priority_score, reverse=True)
+    return gaps[:limit]
+
+
+def _compute_priority(
+    severity: float,
+    breadth: float,
+    staleness: float,
+    source: str,
+) -> float:
+    """Weighted priority score in [0, 1]."""
+    authority = SOURCE_AUTHORITY.get(source, 0.1)
+    w = DEFAULT_WEIGHTS
+    raw = (
+        w["severity"] * min(severity, 1.0)
+        + w["breadth"] * min(breadth, 1.0)
+        + w["staleness"] * min(staleness, 1.0)
+        + w["source_authority"] * authority
+    )
+    return round(min(raw, 1.0), 4)
 
 
 async def _check_emergent_queue(
@@ -337,3 +463,383 @@ async def _check_emergent_clusters(
         )
 
     return None
+
+
+# ── Scored heuristic wrappers ─────────────────────────────────────────
+# Each wraps an existing heuristic, adding GapEvidence and priority score.
+
+async def _scored_emergent_queue(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Scored wrapper for emergent queue check."""
+    target = await _check_emergent_queue(db, focus_neuron_id)
+    if not target:
+        return None
+    eq = await db.get(EmergentQueue, target.emergent_queue_id) if target.emergent_queue_id else None
+    det_count = eq.detection_count if eq else 1
+    evidence = [GapEvidence(
+        signal="emergent_queue",
+        description=target.description,
+        metric_value=float(det_count),
+        threshold=1.0,
+        neuron_ids=target.context_neuron_ids,
+    )]
+    severity = min(det_count / 5.0, 1.0)
+    breadth = min(len(target.context_neuron_ids) / 5.0, 1.0)
+    return ScoredGap(
+        source="emergent_queue",
+        description=target.description,
+        context_neuron_ids=target.context_neuron_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(severity, breadth, 0.5, "emergent_queue"),
+        emergent_queue_id=target.emergent_queue_id,
+    )
+
+
+async def _scored_low_eval(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Scored wrapper for low-eval query check."""
+    target = await _check_low_eval_queries(db, focus_neuron_id)
+    if not target:
+        return None
+    evidence = [GapEvidence(
+        signal="low_eval",
+        description=target.description,
+        metric_value=2.0,
+        threshold=2.0,
+        neuron_ids=target.context_neuron_ids,
+        query_ids=[target.query_id] if target.query_id else [],
+    )]
+    return ScoredGap(
+        source="low_eval",
+        description=target.description,
+        context_neuron_ids=target.context_neuron_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(0.8, 0.3, 0.4, "low_eval"),
+        query_id=target.query_id,
+    )
+
+
+async def _scored_thin_neurons(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Scored wrapper for thin neuron check."""
+    target = await _check_thin_neurons(db, focus_neuron_id)
+    if not target:
+        return None
+    evidence = [GapEvidence(
+        signal="thin_neuron",
+        description=target.description,
+        metric_value=0.0,
+        threshold=50.0,
+        neuron_ids=target.context_neuron_ids,
+    )]
+    return ScoredGap(
+        source="thin_neuron",
+        description=target.description,
+        context_neuron_ids=target.context_neuron_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(0.5, 0.2, 0.3, "thin_neuron"),
+    )
+
+
+async def _scored_sparse_subtrees(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Scored wrapper for sparse subtree check."""
+    target = await _check_sparse_subtrees(db, focus_neuron_id)
+    if not target:
+        return None
+    evidence = [GapEvidence(
+        signal="sparse_subtree",
+        description=target.description,
+        metric_value=0.0,
+        threshold=0.0,
+        neuron_ids=target.context_neuron_ids,
+    )]
+    return ScoredGap(
+        source="sparse_subtree",
+        description=target.description,
+        context_neuron_ids=target.context_neuron_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(0.4, 0.3, 0.3, "sparse_subtree"),
+    )
+
+
+async def _scored_emergent_clusters(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Scored wrapper for emergent cluster check."""
+    target = await _check_emergent_clusters(db, focus_neuron_id)
+    if not target:
+        return None
+    evidence = [GapEvidence(
+        signal="emergent_cluster",
+        description=target.description,
+        metric_value=0.0,
+        threshold=0.0,
+        neuron_ids=target.context_neuron_ids,
+    )]
+    return ScoredGap(
+        source="emergent_cluster",
+        description=target.description,
+        context_neuron_ids=target.context_neuron_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(0.3, 0.4, 0.2, "emergent_cluster"),
+    )
+
+
+# ── New metric-based checks ──────────────────────────────────────────
+
+async def _scored_eval_dimensions(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Check for weak eval dimensions (accuracy, completeness, faithfulness < 3)."""
+    from app.services.metrics_aggregator import get_eval_dimension_averages
+
+    avgs = await get_eval_dimension_averages(db, last_n=50)
+    weak_dims = [
+        (dim, val) for dim, val in avgs.items()
+        if val > 0 and val < 3.0 and dim != "overall"
+    ]
+    if not weak_dims:
+        return None
+
+    worst_dim, worst_val = min(weak_dims, key=lambda x: x[1])
+
+    dim_col = getattr(EvalScore, worst_dim, None)
+    if dim_col is None:
+        return None
+
+    low_q_result = await db.execute(
+        select(EvalScore.query_id)
+        .where(dim_col <= 2)
+        .order_by(EvalScore.query_id.desc())
+        .limit(5)
+    )
+    query_ids = [r[0] for r in low_q_result.all()]
+
+    context_ids: list[int] = []
+    for qid in query_ids[:3]:
+        q = await db.get(Query, qid)
+        if q and q.selected_neuron_ids:
+            nids = json.loads(q.selected_neuron_ids)[:3]
+            context_ids.extend(nids)
+    context_ids = list(set(context_ids))[:10]
+
+    evidence = [GapEvidence(
+        signal=f"low_eval_{worst_dim}",
+        description=(
+            f"Average {worst_dim} score is {worst_val:.2f}/5 across recent queries, "
+            f"below the 3.0 threshold."
+        ),
+        metric_value=worst_val,
+        threshold=3.0,
+        neuron_ids=context_ids,
+        query_ids=query_ids,
+    )]
+
+    severity = (3.0 - worst_val) / 2.0
+    return ScoredGap(
+        source="eval_dimension",
+        description=(
+            f"The graph's responses score poorly on {worst_dim} "
+            f"(avg {worst_val:.2f}/5 over last 50 queries). Generate a question "
+            f"that tests {worst_dim} to expose and address this weakness."
+        ),
+        context_neuron_ids=context_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(severity, 0.5, 0.4, "eval_dimension"),
+    )
+
+
+async def _scored_zero_hit_neurons(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Find neurons that have never been activated and are > 30 days old."""
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    stmt = select(Neuron).where(
+        Neuron.is_active.is_(True),
+        Neuron.invocations == 0,
+        Neuron.created_at < cutoff,
+        Neuron.layer >= 2,
+    )
+    if focus_neuron_id:
+        subtree_ids = await _get_subtree_ids(db, focus_neuron_id)
+        stmt = stmt.where(Neuron.id.in_(subtree_ids))
+
+    result = await db.execute(stmt.order_by(Neuron.created_at).limit(10))
+    zero_neurons = result.scalars().all()
+    if not zero_neurons:
+        return None
+
+    nids = [n.id for n in zero_neurons]
+    sample = zero_neurons[0]
+    context_ids = await _get_ancestor_ids(db, sample.id)
+    context_ids.extend(nids[:5])
+
+    evidence = [GapEvidence(
+        signal="zero_hit_neuron",
+        description=(
+            f"{len(zero_neurons)} neurons have never been activated despite being "
+            f"over 30 days old. First: #{sample.id} '{sample.label}'."
+        ),
+        metric_value=float(len(zero_neurons)),
+        threshold=1.0,
+        neuron_ids=nids,
+    )]
+
+    breadth = min(len(zero_neurons) / 10.0, 1.0)
+    return ScoredGap(
+        source="zero_hit_neuron",
+        description=(
+            f"Neuron #{sample.id} '{sample.label}' (L{sample.layer}, "
+            f"dept={sample.department or 'none'}) has never been activated in over 30 days. "
+            f"Generate a question that would require this neuron's knowledge to answer."
+        ),
+        context_neuron_ids=context_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(0.3, breadth, 0.6, "zero_hit_neuron"),
+    )
+
+
+async def _scored_coverage_gap(db: AsyncSession) -> ScoredGap | None:
+    """Detect department coverage imbalance via coefficient of variation."""
+    from app.services.metrics_aggregator import get_department_coverage
+
+    coverage = await get_department_coverage(db)
+    if len(coverage) < 2:
+        return None
+
+    counts = list(coverage.values())
+    mean_c = sum(counts) / len(counts)
+    if mean_c == 0:
+        return None
+    variance = sum((c - mean_c) ** 2 for c in counts) / len(counts)
+    std_c = variance ** 0.5
+    cv = std_c / mean_c
+
+    if cv < 0.5:
+        return None
+
+    min_dept = min(coverage, key=coverage.get)  # type: ignore[arg-type]
+    min_count = coverage[min_dept]
+    max_dept = max(coverage, key=coverage.get)  # type: ignore[arg-type]
+    max_count = coverage[max_dept]
+
+    result = await db.execute(
+        select(Neuron.id).where(
+            Neuron.is_active.is_(True),
+            Neuron.department == min_dept,
+        ).limit(5)
+    )
+    context_ids = [r[0] for r in result.all()]
+
+    evidence = [GapEvidence(
+        signal="coverage_gap",
+        description=(
+            f"Department coverage CV={cv:.2f} (threshold 0.5). "
+            f"'{min_dept}' has {min_count} neurons vs '{max_dept}' with {max_count}."
+        ),
+        metric_value=cv,
+        threshold=0.5,
+        neuron_ids=context_ids,
+    )]
+
+    severity = min((cv - 0.5) / 0.5, 1.0)
+    return ScoredGap(
+        source="coverage_gap",
+        description=(
+            f"Department '{min_dept}' has only {min_count} active neurons compared to "
+            f"'{max_dept}' with {max_count} (CV={cv:.2f}). Generate a question about "
+            f"{min_dept} topics to build out this underrepresented area."
+        ),
+        context_neuron_ids=context_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(severity, 0.4, 0.3, "coverage_gap"),
+    )
+
+
+async def _scored_quality_trend(db: AsyncSession) -> ScoredGap | None:
+    """Detect declining quality by comparing recent vs previous eval windows."""
+    from app.services.metrics_aggregator import get_quality_trend
+
+    trend = await get_quality_trend(db, window=20)
+    delta = trend["delta"]
+
+    if delta >= -0.3 or trend["previous_avg"] == 0:
+        return None
+
+    evidence = [GapEvidence(
+        signal="quality_trend",
+        description=(
+            f"Average eval score dropped from {trend['previous_avg']:.2f} to "
+            f"{trend['recent_avg']:.2f} (delta={delta:.2f})."
+        ),
+        metric_value=abs(delta),
+        threshold=0.3,
+    )]
+
+    severity = min(abs(delta) / 1.0, 1.0)
+    return ScoredGap(
+        source="quality_trend",
+        description=(
+            f"Overall eval quality is declining (avg {trend['previous_avg']:.2f} → "
+            f"{trend['recent_avg']:.2f}). Generate a question in an area where the "
+            f"graph should perform well to diagnose the regression."
+        ),
+        context_neuron_ids=[],
+        evidence=evidence,
+        priority_score=_compute_priority(severity, 0.6, 0.5, "quality_trend"),
+    )
+
+
+async def _scored_stale_neurons(
+    db: AsyncSession, focus_neuron_id: int | None,
+) -> ScoredGap | None:
+    """Find active regulatory neurons with no verification in 90+ days."""
+    cutoff = datetime.utcnow() - timedelta(days=90)
+    stmt = select(Neuron).where(
+        Neuron.is_active.is_(True),
+        Neuron.layer >= 2,
+        (Neuron.last_verified.is_(None)) | (Neuron.last_verified < cutoff),
+        Neuron.source_type == "regulatory",
+    )
+    if focus_neuron_id:
+        subtree_ids = await _get_subtree_ids(db, focus_neuron_id)
+        stmt = stmt.where(Neuron.id.in_(subtree_ids))
+
+    result = await db.execute(stmt.order_by(Neuron.created_at).limit(10))
+    stale = result.scalars().all()
+    if not stale:
+        return None
+
+    nids = [n.id for n in stale]
+    sample = stale[0]
+    context_ids = await _get_ancestor_ids(db, sample.id)
+    context_ids.extend(nids[:5])
+
+    evidence = [GapEvidence(
+        signal="stale_neuron",
+        description=(
+            f"{len(stale)} regulatory neurons have not been verified in 90+ days. "
+            f"First: #{sample.id} '{sample.label}'."
+        ),
+        metric_value=float(len(stale)),
+        threshold=1.0,
+        neuron_ids=nids,
+    )]
+
+    breadth = min(len(stale) / 10.0, 1.0)
+    return ScoredGap(
+        source="stale_neuron",
+        description=(
+            f"Regulatory neuron #{sample.id} '{sample.label}' has not been verified "
+            f"in over 90 days. Generate a question that would test whether this "
+            f"neuron's content is still current and accurate."
+        ),
+        context_neuron_ids=context_ids,
+        evidence=evidence,
+        priority_score=_compute_priority(0.7, breadth, 0.8, "stale_neuron"),
+    )
