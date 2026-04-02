@@ -1015,7 +1015,7 @@ def _parse_refine_response(
     except (json.JSONDecodeError, KeyError, TypeError):
         reasoning = raw_text
         neuron_vs_raw_verdict = ""
-    return reasoning, updates, new_neurons
+    return reasoning, neuron_vs_raw_verdict, updates, new_neurons
 
 
 @router.post("/query/{query_id}/refine", response_model=RefineResponse)

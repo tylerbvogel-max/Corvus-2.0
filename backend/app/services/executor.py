@@ -974,7 +974,7 @@ async def _execute_slot(
         return result
     except Exception as e:
         duration_ms = round((time.monotonic() - start_time) * 1000)
-        error_msg = str(e)[:200]
+        error_msg = str(e)[:200] or f"{type(e).__name__}: (no message)"
 
         if on_stage:
             await on_stage("execute_llm", {"status": "error", "detail": {
@@ -1044,14 +1044,10 @@ async def _execute_slot_llm(
             "model_version": direct_result.get("model_version"),
         }
 
-    # Raw path: no neurons, just user message + model
-    raw_system_prompt = (
-        "You are a knowledgeable expert assistant. "
-        "Provide accurate, precise answers based on your training knowledge alone. "
-        "Do not reference external documents or context."
-    )
+    # Raw path: no neurons, no system prompt — just the user's question.
+    # Raw slots are the control group; they get zero domain context from Corvus.
     llm_result = await llm_chat(
-        system_prompt=raw_system_prompt,
+        system_prompt="",
         user_message=user_message,
         max_tokens=4096,
         model=model_name,
