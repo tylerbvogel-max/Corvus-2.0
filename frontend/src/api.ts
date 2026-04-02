@@ -468,8 +468,23 @@ export function fetchSpreadLog(limit = 100): Promise<SpreadLogResponse> {
   return json<SpreadLogResponse>(`/neurons/edges/spread-log?limit=${limit}`);
 }
 
-export function fetchRefinementHistory(): Promise<NeuronRefinementEntry[]> {
-  return json<NeuronRefinementEntry[]>('/neurons/refinements');
+export function fetchRefinementHistory(params?: {
+  action?: string;
+  field?: string;
+  neuron_id?: number;
+  since?: string;
+  until?: string;
+  limit?: number;
+}): Promise<NeuronRefinementEntry[]> {
+  const q = new URLSearchParams();
+  if (params?.action) q.set('action', params.action);
+  if (params?.field) q.set('field', params.field);
+  if (params?.neuron_id) q.set('neuron_id', String(params.neuron_id));
+  if (params?.since) q.set('since', params.since);
+  if (params?.until) q.set('until', params.until);
+  if (params?.limit) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  return json<NeuronRefinementEntry[]>(`/neurons/refinements${qs ? '?' + qs : ''}`);
 }
 
 export interface CheckpointResponse {

@@ -1,6 +1,7 @@
 """Neuron inspection endpoints."""
 
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,29 +114,52 @@ async def neurons_capacity(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/refinements", response_model=list[NeuronRefinementOut])
-async def list_refinements(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(NeuronRefinement)
-        .order_by(NeuronRefinement.created_at.desc())
-        .limit(200)
-    )
-    rows = result.scalars().all()
-    out = []
+async def list_refinements(
+    action: str | None = None,
+    field: str | None = None,
+    neuron_id: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 500,
+    db: AsyncSession = Depends(get_db),
+):
+    """List refinements with optional filters for action, field, neuron, and date range."""
+    stmt = select(NeuronRefinement).order_by(NeuronRefinement.created_at.desc())
+    if action:
+        stmt = stmt.where(NeuronRefinement.action == action)
+    if field:
+        stmt = stmt.where(NeuronRefinement.field == field)
+    if neuron_id:
+        stmt = stmt.where(NeuronRefinement.neuron_id == neuron_id)
+    if since:
+        stmt = stmt.where(NeuronRefinement.created_at >= datetime.fromisoformat(since))
+    if until:
+        stmt = stmt.where(NeuronRefinement.created_at <= datetime.fromisoformat(until))
+    stmt = stmt.limit(min(limit, 2000))
+    rows = (await db.execute(stmt)).scalars().all()
+    return await _build_refinement_list(db, rows)
+
+
+async def _build_refinement_list(
+    db: AsyncSession, rows: list[NeuronRefinement],
+) -> list[NeuronRefinementOut]:
+    """Convert refinement rows to output schema with joined labels."""
+    out: list[NeuronRefinementOut] = []
     for r in rows:
         neuron = await db.get(Neuron, r.neuron_id)
-        query = await db.get(QueryModel, r.query_id)
+        query = await db.get(QueryModel, r.query_id) if r.query_id else None
+        snippet = None
+        if query:
+            msg = query.user_message or ""
+            snippet = (msg[:80] + "...") if len(msg) > 80 else msg
         out.append(NeuronRefinementOut(
-            id=r.id,
-            query_id=r.query_id,
-            neuron_id=r.neuron_id,
-            action=r.action,
-            field=r.field,
-            old_value=r.old_value,
-            new_value=r.new_value,
+            id=r.id, query_id=r.query_id, neuron_id=r.neuron_id,
+            action=r.action, field=r.field,
+            old_value=r.old_value, new_value=r.new_value,
             reason=r.reason,
             created_at=r.created_at.isoformat() if r.created_at else None,
             neuron_label=neuron.label if neuron else None,
-            query_snippet=(query.user_message[:80] + "...") if query and len(query.user_message) > 80 else (query.user_message if query else None),
+            query_snippet=snippet,
         ))
     return out
 

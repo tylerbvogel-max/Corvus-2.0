@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import type { ReactNode } from 'react'
 import Explorer from './components/Explorer'
 import Dashboard from './components/Dashboard'
 import QueryLab from './components/QueryLab'
@@ -21,12 +22,13 @@ import EngramPage from './components/EngramPage'
 import CorvusPage from './components/CorvusPage'
 import ObservationReviewPage from './components/ObservationReviewPage'
 import ProposalQueuePage from './components/ProposalQueuePage'
+import GroupLandingPage from './components/GroupLandingPage'
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 import { checkAccess, setAccessKey, getAccessKey } from './auth'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'proposal-queue' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'proposal-queue' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations' | 'query-landing' | 'autopilot-landing' | 'knowledge-landing' | 'evaluate-landing' | 'history-landing';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -41,56 +43,132 @@ const THEME_LABELS: Record<Theme, string> = {
 interface NavItem {
   key: Tab;
   label: string;
+  description: string;
   className?: string;
   labelColor?: string;
 }
 
-function buildNavGroups(tenantId: string | undefined): { label: string; items: NavItem[] }[] {
-  const groups: { label: string; items: NavItem[] }[] = [];
+interface NavGroup {
+  label: string;
+  landingKey: Tab;
+  description: string;
+  icon: ReactNode;
+  items: NavItem[];
+}
 
-  // Screen Watcher — only for tenants with screen capture enabled
+// --- Group icons (16x16, stroke-based, Feather style) ---
+
+const IconTerminal = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+  </svg>
+);
+
+const IconCompass = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+  </svg>
+);
+
+const IconNetwork = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="5" r="3" /><circle cx="5" cy="19" r="3" /><circle cx="19" cy="19" r="3" />
+    <line x1="12" y1="8" x2="5" y2="16" /><line x1="12" y1="8" x2="19" y2="16" />
+  </svg>
+);
+
+const IconClipboard = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+    <rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 14l2 2 4-4" />
+  </svg>
+);
+
+const IconClock = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+  </svg>
+);
+
+const IconMonitor = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+  </svg>
+);
+
+function buildNavGroups(tenantId: string | undefined): NavGroup[] {
+  const groups: NavGroup[] = [];
+
   if (tenantId === 'corvus-apex') {
     groups.push({
       label: 'Corvus',
+      landingKey: 'corvus-feed',
+      description: 'Screen capture and observation pipeline',
+      icon: IconMonitor,
       items: [
-        { key: 'corvus-feed', label: 'Screen Watcher' },
-        { key: 'corvus-observations', label: 'Observations' },
+        { key: 'corvus-feed', label: 'Screen Watcher', description: 'Live screen capture feed and OCR pipeline' },
+        { key: 'corvus-observations', label: 'Observations', description: 'Review and approve captured observations' },
       ],
     });
   }
 
   groups.push(
     {
-      label: 'Workbench',
+      label: 'Query',
+      landingKey: 'query-landing',
+      description: 'Run and test queries against the neuron graph',
+      icon: IconTerminal,
       items: [
-        { key: 'query', label: 'Query Lab' },
-        { key: 'samples', label: 'Samples' },
-        { key: 'autopilot', label: 'Autopilot' },
-        { key: 'proposal-queue', label: 'Proposal Queue' },
-        { key: 'refinements', label: 'Refinements' },
-        { key: 'emergent-queue', label: 'Emergent Queue' },
-        { key: 'synaptic-learning', label: 'Synaptic Learning' },
+        { key: 'query', label: 'Query Lab', description: 'Run queries against the neuron graph' },
+        { key: 'samples', label: 'Samples', description: 'Pre-built queries for testing and demos' },
+      ],
+    },
+    {
+      label: 'Autopilot',
+      landingKey: 'autopilot-landing',
+      description: 'Automated gap detection and staged improvements',
+      icon: IconCompass,
+      items: [
+        { key: 'autopilot', label: 'Autopilot', description: 'Automated gap detection and improvement cycles' },
+        { key: 'proposal-queue', label: 'Proposal Queue', description: 'Review and approve autopilot proposals' },
+        { key: 'emergent-queue', label: 'Emergent Queue', description: 'Unresolved patterns awaiting classification' },
       ],
     },
     {
       label: 'Knowledge',
+      landingKey: 'knowledge-landing',
+      description: 'Browse and visualize the neuron graph',
+      icon: IconNetwork,
       items: [
-        { key: 'explorer', label: 'Explorer' },
-        { key: 'engrams', label: 'Engrams' },
-        { key: 'graph', label: 'Graph' },
-        { key: 'universe', label: '3D Universe' },
-        { key: 'dashboard', label: 'Dashboard' },
-        { key: 'layer-heatmap', label: 'Layer Heatmap' },
+        { key: 'explorer', label: 'Explorer', description: 'Browse and edit individual neurons' },
+        { key: 'engrams', label: 'Engrams', description: 'Source documents linked to the graph' },
+        { key: 'graph', label: 'Graph', description: 'Circle-packing visualization of the hierarchy' },
+        { key: 'universe', label: '3D Universe', description: 'Three-dimensional neuron network view' },
+        { key: 'layer-heatmap', label: 'Layer Heatmap', description: 'Activity heatmap across graph layers' },
       ],
     },
     {
       label: 'Evaluate',
+      landingKey: 'evaluate-landing',
+      description: 'System health, quality, and compliance metrics',
+      icon: IconClipboard,
       items: [
-        { key: 'knowledge-governance', label: 'Governance' },
-        { key: 'performance', label: 'Performance' },
-        { key: 'quality', label: 'Quality' },
-        { key: 'fairness', label: 'Fairness' },
-        { key: 'evaluation', label: 'Evaluation' },
+        { key: 'dashboard', label: 'Dashboard', description: 'Aggregate statistics and system overview' },
+        { key: 'knowledge-governance', label: 'Governance', description: 'Knowledge governance and compliance metrics' },
+        { key: 'quality', label: 'Quality', description: 'Response quality scoring and trends' },
+        { key: 'performance', label: 'Performance', description: 'Pipeline latency and throughput metrics' },
+        { key: 'fairness', label: 'Fairness', description: 'Bias detection across departments and roles' },
+        { key: 'evaluation', label: 'Evaluation', description: 'Per-query evaluation scores and history' },
+      ],
+    },
+    {
+      label: 'History',
+      landingKey: 'history-landing',
+      description: 'How the graph has evolved over time',
+      icon: IconClock,
+      items: [
+        { key: 'refinements', label: 'Refinements', description: 'History of neuron updates and changes' },
+        { key: 'synaptic-learning', label: 'Synaptic Learning', description: 'Learned patterns from query feedback' },
       ],
     },
   );
@@ -168,7 +246,7 @@ export default function App() {
 
   // Build nav groups based on tenant (screen watcher only for apex)
   const navGroups = buildNavGroups(tenantConfig?.tenant_id);
-  const activeGroup = navGroups.find(g => g.items.some(i => i.key === tab))?.label;
+  const activeGroup = navGroups.find(g => g.landingKey === tab || g.items.some(i => i.key === tab))?.label;
 
   // Auth gate
   if (authStatus === 'checking') {
@@ -247,7 +325,7 @@ export default function App() {
             ))}
           </div>
         )}
-        {!collapsed && (
+        {!collapsed ? (
           <nav className="sidebar-nav">
             {navGroups.map(group => (
               <div key={group.label} className={`sidebar-group${activeGroup === group.label ? ' sidebar-group-active' : ''}`}>
@@ -272,6 +350,19 @@ export default function App() {
                   </div>
                 )}
               </div>
+            ))}
+          </nav>
+        ) : (
+          <nav className="sidebar-collapsed-nav">
+            {navGroups.map(group => (
+              <button
+                key={group.label}
+                className={`sidebar-collapsed-icon-btn${activeGroup === group.label ? ' active' : ''}`}
+                onClick={() => setTab(group.landingKey)}
+                title={group.label}
+              >
+                {group.icon}
+              </button>
             ))}
           </nav>
         )}
@@ -346,6 +437,18 @@ export default function App() {
         {tab === 'fairness' && <FairnessPage />}
         {tab === 'performance' && <PerformancePage />}
         {tab === 'knowledge-governance' && <KnowledgeGovernancePage />}
+        {navGroups.map(group => (
+          tab === group.landingKey && (
+            <GroupLandingPage
+              key={group.landingKey}
+              title={group.label}
+              icon={group.icon}
+              description={group.description}
+              items={group.items.map(i => ({ key: i.key, label: i.label, description: i.description }))}
+              onNavigate={k => setTab(k as Tab)}
+            />
+          )
+        ))}
       </main>
     </div>
   )
