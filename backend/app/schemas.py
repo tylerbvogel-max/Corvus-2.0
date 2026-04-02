@@ -4,19 +4,10 @@ from pydantic import BaseModel, Field
 
 
 class QuerySlotRequest(BaseModel):
-    mode: str
-    token_budget: int = Field(8000, ge=1000, le=32000)
-    top_k: int = Field(60, ge=1, le=500)
-    max_output_tokens: int | None = Field(None, ge=256, le=8192)
-    label: str | None = None
-
-
-class QuerySlotRequest(BaseModel):
     mode: str = Field(..., min_length=1)  # e.g. "haiku_neuron", "sonnet_raw", "opus_neuron"
     token_budget: int = Field(8000, ge=1000, le=32000)
     top_k: int = Field(60, ge=1, le=500)
-    agent_mode: bool = True  # Per-slot control: agent orchestration or direct call
-    confidence_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    max_output_tokens: int | None = Field(None, ge=256, le=8192)
     label: str | None = None
 
 
@@ -39,7 +30,6 @@ class SlotResult(BaseModel):
     token_budget: int | None = None
     top_k: int | None = None
     label: str | None = None
-    agent_mode: bool = False  # Whether this slot used agent orchestration
 
 
 class NeuronScoreResponse(BaseModel):
@@ -80,52 +70,6 @@ class OutputCheckOut(BaseModel):
     grounding: GroundingOut | None = None
 
 
-class AgentResultOut(BaseModel):
-    """Result from a single domain agent."""
-    domain_key: str
-    department: str
-    role_key: str
-    role: str
-    findings: str
-    citations: list[str] = []
-    confidence: float
-    flags: list[str] = []
-    neuron_ids: list[int] = []
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost_usd: float = 0
-    duration_ms: int = 0
-    error: bool = False
-    error_message: str = ""
-
-
-class VerificationResultOut(BaseModel):
-    """Result from verification agent critique."""
-    critique: str
-    gaps: list[str] = []
-    confidence_adjustment: float = 0.0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost_usd: float = 0
-    error: bool = False
-    error_message: str = ""
-
-
-class AgentExecutionOut(BaseModel):
-    """Result from full agent dispatch and coordination."""
-    agent_results: list[AgentResultOut] = []
-    synthesis: str
-    coordinator_model: str
-    escalated_to_opus: bool = False
-    domains_active: list[str] = []
-    coordinator_input_tokens: int = 0
-    coordinator_output_tokens: int = 0
-    coordinator_cost_usd: float = 0
-    total_agents_dispatched: int = 0
-    total_cost_usd: float = 0
-    verification_result: VerificationResultOut | None = None
-
-
 class QueryResponse(BaseModel):
     query_id: int
     intent: str | None = None
@@ -141,7 +85,6 @@ class QueryResponse(BaseModel):
     total_cost: float = 0
     input_guard: InputGuardOut | None = None
     output_checks: list[OutputCheckOut] = []
-    agent_execution: AgentExecutionOut | None = None
 
 
 class EvalRequest(BaseModel):

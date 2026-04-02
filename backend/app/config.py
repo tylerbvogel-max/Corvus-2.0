@@ -106,16 +106,6 @@ class Settings(BaseSettings):
     engram_token_budget_fraction: float = 0.25
     engram_fallback_on_api_failure: bool = True
     engram_haiku_extract_threshold: int = 2000
-    # Agentic orchestration (Session 3+): per-query control via QueryRequest
-    agent_escalation_threshold: float = 0.7
-    agent_max_neurons_per_domain: int = 12
-    agent_min_neurons_per_domain: int = 2
-    agent_token_budget_per_domain: int = 3000
-    agent_max_domains: int = 8
-    agent_verification_enabled: bool = False
-    agent_verification_threshold: float = 0.6
-    agent_timeout_seconds: int = 90
-    agent_confidence_threshold: float = 0.5
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

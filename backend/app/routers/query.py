@@ -371,11 +371,9 @@ async def get_query_detail(query_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/query", response_model=QueryResponse)
 async def post_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
-    """Execute a query through the agent orchestration pipeline (Session 3+).
+    """Execute a query through the neuron pipeline.
 
-    Routes based on agent_mode:
-    - agent_mode=True: classify → score → partition → dispatch agents → synthesize
-    - agent_mode=False: classify → score → assemble → single Haiku call
+    classify → score → assemble → execute (per-slot, parallel).
     """
     # JPL Rule 5: message must be non-empty (defense-in-depth beyond Pydantic)
     assert req.message and req.message.strip(), "Query message must be non-empty"
@@ -419,7 +417,7 @@ async def post_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
             result.get("assembled_prompt"),
         ) if result.get("neuron_scores") else {"grounded": None, "confidence": None, "reason": "No neuron context"}
         output_checks.append({
-            "mode": "agent" if result.get("agent_execution") else "direct",
+            "mode": "direct",
             "risk_flags": risk_flags,
             "grounding": grounding,
         })
@@ -476,7 +474,7 @@ async def post_query_stream(req: QueryRequest, db: AsyncSession = Depends(get_db
                     response_text, result.get("assembled_prompt"),
                 ) if result.get("neuron_scores") else {"grounded": None, "confidence": None, "reason": "No neuron context"}
                 output_checks.append({
-                    "mode": "agent" if result.get("agent_execution") else "direct",
+                    "mode": "direct",
                     "risk_flags": risk_flags,
                     "grounding": grounding,
                 })

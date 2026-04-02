@@ -90,7 +90,7 @@ function slotsToChartModels(slots: SlotResult[], classifyCost: number, baseline:
       label: slotDisplayLabel(slot, allModes),
       mode: slot.mode,
       color: sameModeTotal > 1 ? slotColor(slot.mode, sameModeBefore, sameModeTotal, colors ?? {}) : getModeColor(slot.mode, colors),
-      inputTokens: slot.input_tokens,
+      inputTokens: slot.input_tokens + (slot.cache_creation_tokens ?? 0) + (slot.cache_read_tokens ?? 0),
       outputTokens: slot.output_tokens,
       cost: slot.cost_usd + (isFirstNeuron ? classifyCost : 0),
       durationMs: slot.duration_ms ?? 0,
@@ -104,14 +104,11 @@ function slotsToChartModels(slots: SlotResult[], classifyCost: number, baseline:
 const DIMENSIONS = ['accuracy', 'completeness', 'clarity', 'faithfulness', 'overall'] as const;
 const DIM_LABELS: Record<string, string> = { accuracy: 'Accuracy', completeness: 'Completeness', clarity: 'Clarity', faithfulness: 'Faithfulness', overall: 'Overall' };
 
-// Enhanced SlotConfig type — now includes per-slot agent_mode and confidence_threshold
 interface EnhancedSlotConfig {
   id: number;
   mode: string;
   tokenBudget: number;
   maxOutputTokens: number;
-  agentMode: boolean;
-  confidenceThreshold: number;
   color: string;
 }
 
@@ -288,19 +285,6 @@ function ModelCard({
 
         {hasKG && (
           <>
-            {/* Research Mode toggle */}
-            <div className="control-group">
-              <label className="control-label">
-                <input
-                  type="checkbox"
-                  checked={slot.agentMode}
-                  onChange={e => onUpdate({ agentMode: e.target.checked })}
-                  disabled={isLoading}
-                />
-                <span>Research Mode</span>
-              </label>
-            </div>
-
             {/* Input Context slider */}
             <div className="control-group">
               <label className="control-label">Input Context</label>
@@ -314,21 +298,6 @@ function ModelCard({
                 <option value="Standard">Standard (8K)</option>
                 <option value="Deep">Deep (24K)</option>
               </select>
-            </div>
-
-            {/* Confidence slider */}
-            <div className="control-group">
-              <label className="control-label">Confidence: {slot.confidenceThreshold.toFixed(2)}</label>
-              <input
-                type="range"
-                min="0.1"
-                max="1.0"
-                step="0.05"
-                value={slot.confidenceThreshold}
-                onChange={e => onUpdate({ confidenceThreshold: parseFloat(e.target.value) })}
-                disabled={isLoading}
-                className="control-slider"
-              />
             </div>
           </>
         )}
@@ -359,7 +328,7 @@ function ModelCard({
               <div className="response-text markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(slotResult.response ?? '', { async: false }) as string }} />
               <div className="response-meta">
                 <span className="cost-badge">${slotResult.cost_usd.toFixed(4)}</span>
-                <span className="tokens-badge">{slotResult.input_tokens + slotResult.output_tokens} tokens</span>
+                <span className="tokens-badge">{slotResult.input_tokens + (slotResult.cache_creation_tokens ?? 0) + (slotResult.cache_read_tokens ?? 0) + slotResult.output_tokens} tokens</span>
               </div>
             </>
           )}
@@ -740,9 +709,9 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
   const MODE_COLORS = useMemo(() => buildModeColors(availableModels), [availableModels]);
 
 
-  // New enhanced slot config (with per-slot agent_mode and confidence_threshold)
+  // Slot configurations
   const [slotConfigs, setSlotConfigs] = useState<EnhancedSlotConfig[]>([
-    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, maxOutputTokens: 4096, agentMode: true, confidenceThreshold: 0.5, color: nextSlotColor() },
+    { id: nextSlotId++, mode: 'haiku_neuron', tokenBudget: 8000, maxOutputTokens: 4096, color: nextSlotColor() },
   ]);
   // For backward compatibility: keep a mapping of slot results by ID
   const [slotResults, setSlotResults] = useState<Record<number, SlotResult | null>>({});
@@ -800,8 +769,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       token_budget: sc.tokenBudget,
       top_k: 60, // Keep as internal default; hidden from users per plan
       max_output_tokens: sc.maxOutputTokens,
-      agent_mode: sc.agentMode,
-      confidence_threshold: sc.confidenceThreshold,
     }));
   }
 
@@ -847,7 +814,7 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
     };
     setHistory(prev => [pendingEntry, ...prev]);
     try {
-      const { promise, abort } = submitQueryStream(message, true, 0.5, (event) => {
+      const { promise, abort } = submitQueryStream(message, (event) => {
         setStageStatuses(prev => ({ ...prev, [event.stage]: event }));
 
         // Track per-slot completion: remove slot from loading set when it finishes
@@ -988,8 +955,6 @@ export default function QueryLab({ onNavigateToNeuron }: { onNavigateToNeuron?: 
       mode,
       tokenBudget: 8000,
       maxOutputTokens: 4096,
-      agentMode: true,
-      confidenceThreshold: 0.5,
       color: nextSlotColor(),
     }]);
   }
@@ -1373,7 +1338,7 @@ function LiveResult({ result, loading, message, stageStatuses, slotLoadingSet, s
       <PStep status={stepStatus('assemble_prompt')}>
         {(() => {
           const assembleData = stageStatuses['assemble_prompt']?.detail as any;
-          const assembled = assembleData?.assembled_prompt || result?.assembled_prompt;
+          const assembled = assembleData?.assembled_prompt || (result as any)?.assembled_prompt;
           const neuronsActivated = assembleData?.neurons_activated || result?.neurons_activated || 0;
           return (
             <>
@@ -1448,9 +1413,8 @@ function LiveResult({ result, loading, message, stageStatuses, slotLoadingSet, s
                     )}
                     {!slot.error && (slot.input_tokens > 0 || (slot.cache_creation_tokens ?? 0) > 0 || (slot.cache_read_tokens ?? 0) > 0) && (
                       <div style={{ display: 'flex', gap: 12, marginTop: 10, fontSize: '0.75rem', color: 'var(--text-dim)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-                        <div><strong style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{slot.input_tokens.toLocaleString()}</strong><br />Input</div>
-                        {(slot.cache_creation_tokens ?? 0) > 0 && <div><strong style={{ color: '#fb923c', fontFamily: 'monospace' }}>{slot.cache_creation_tokens!.toLocaleString()}</strong><br />Cache Create</div>}
-                        {(slot.cache_read_tokens ?? 0) > 0 && <div><strong style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{slot.cache_read_tokens!.toLocaleString()}</strong><br />Cache Read</div>}
+                        <div><strong style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{(slot.input_tokens + (slot.cache_creation_tokens ?? 0) + (slot.cache_read_tokens ?? 0)).toLocaleString()}</strong><br />Input</div>
+                        <div><strong style={{ color: 'var(--text)', fontFamily: 'monospace' }}>{slot.output_tokens.toLocaleString()}</strong><br />Output</div>
                       </div>
                     )}
                   </div>

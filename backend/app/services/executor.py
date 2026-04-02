@@ -31,8 +31,6 @@ from app.services.prompt_assembler import assemble_prompt
 from app.services.propagation import propagate_activation
 from app.services.neuron_service import NeuronCandidate
 from app.services.scoring_engine import NeuronScoreBreakdown
-from app.services.agent_dispatcher import dispatch_agents, AgentExecution
-from app.services.agent_coordinator import coordinate
 from app.tenant import tenant
 
 
@@ -488,7 +486,6 @@ def _create_query_record(
     slot_specs: list[dict],
     primary_prompt: str,
     classify_result: dict,
-    agent_mode: bool = False,
 ) -> Query:
     assert isinstance(user_message, str), "user_message must be a string"
     assert isinstance(slot_specs, list) and len(slot_specs) > 0, \
@@ -506,7 +503,6 @@ def _create_query_record(
         classify_output_tokens=classify_result["output_tokens"],
         run_neuron=needs_neurons,
         run_opus=any(s["mode"] == "opus_raw" for s in slot_specs),
-        agent_mode=agent_mode,
     )
 
 
@@ -638,7 +634,7 @@ async def _run_direct_call(
     on_stage: StageCallback,
     model: str = "haiku",
 ) -> dict:
-    """Execute direct call path (agent_mode=false): single LLM call with assembled neurons.
+    """Execute direct call path: single LLM call with assembled neurons.
 
     Uses ctx.system_prompt (already assembled by prepare_context) + user message.
     Returns dict with text, input_tokens, output_tokens, cost_usd, cache tokens.
@@ -675,99 +671,6 @@ async def _run_direct_call(
         "cache_read_tokens": result.get("cache_read_tokens", 0),
         "model_version": result.get("model_version"),
     }
-
-
-async def _run_agent_pipeline(
-    db: AsyncSession,
-    user_message: str,
-    ctx: PreparedContext,
-    confidence_threshold: float = 0.5,
-    on_stage: StageCallback = None,
-    model: str = "haiku",
-) -> AgentExecution:
-    """Execute the agentic orchestration path.
-
-    Assumes prepare_context() has already run (classify, score, spread).
-    Dispatches parallel domain agents, coordinates synthesis, returns AgentExecution.
-
-    Args:
-        db: async session
-        user_message: original user query
-        ctx: PreparedContext from prepare_context()
-        confidence_threshold: minimum neuron score to include
-        on_stage: optional callback for progress events
-        model: model to use for agents and coordinator
-    """
-    assert ctx is not None, "ctx must be populated from prepare_context"
-    assert ctx.all_scored, "all_scored must be non-empty"
-
-    # Get closing instruction for the intent
-    from app.services.prompt_assembler import CLOSING_INSTRUCTION_MAP
-    intent_lower = ctx.intent.lower()
-    for key in CLOSING_INSTRUCTION_MAP:
-        if key in intent_lower:
-            closing_instruction = CLOSING_INSTRUCTION_MAP[key]
-            break
-    else:
-        closing_instruction = CLOSING_INSTRUCTION_MAP.get("general_query", "")
-
-    # Dispatch all domain agents concurrently
-    agent_results = await dispatch_agents(
-        all_scored=ctx.all_scored,
-        neuron_map=ctx.neuron_map,
-        query=user_message,
-        intent=ctx.intent,
-        closing_instruction=closing_instruction,
-        agent_token_budget=settings.agent_token_budget_per_domain,
-        confidence_threshold=confidence_threshold,
-        tenant_personas=tenant.agent_role_personas,
-        model=model,
-        on_stage=on_stage,
-    )
-
-    # Coordinate results
-    agent_exec = await coordinate(
-        agent_results=agent_results,
-        query=user_message,
-        intent=ctx.intent,
-        escalation_threshold=settings.agent_escalation_threshold,
-        on_stage=on_stage,
-        base_model=model,
-    )
-
-    return agent_exec
-
-
-def _populate_query_from_agent_execution(
-    query: Query,
-    agent_exec: AgentExecution,
-    classify_result: dict,
-) -> float:
-    """Populate query record from agent execution results."""
-    assert agent_exec is not None, "agent_exec must be non-None"
-
-    query.agent_mode = True
-    query.agent_results_json = json.dumps({
-        "agent_results": [r.__dict__ for r in agent_exec.agent_results],
-        "synthesis": agent_exec.synthesis,
-        "coordinator_model": agent_exec.coordinator_model,
-        "escalated_to_opus": agent_exec.escalated_to_opus,
-        "domains_active": agent_exec.domains_active,
-        "total_agents_dispatched": agent_exec.total_agents_dispatched,
-        "total_cost_usd": agent_exec.total_cost_usd,
-    })
-
-    # Store synthesis as primary response
-    query.response_text = agent_exec.synthesis
-    query.execute_input_tokens = agent_exec.coordinator_input_tokens
-    query.execute_output_tokens = agent_exec.coordinator_output_tokens
-
-    total_cost = agent_exec.total_cost_usd + classify_result.get("cost_usd", 0)
-    query.cost_usd = total_cost
-    query.model_version = agent_exec.coordinator_model
-
-    assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
-    return total_cost
 
 
 def _populate_query_from_results(
@@ -813,11 +716,10 @@ def _build_response(
     classify_result: dict,
     slot_results: list[dict],
     total_cost: float,
-    agent_execution: AgentExecution | None = None,
 ) -> dict:
     assert total_cost >= 0, f"total_cost must be non-negative, got {total_cost}"
 
-    response_dict = {
+    return {
         "query_id": query.id,
         "intent": ctx.intent if needs_neurons and ctx else None,
         "departments": ctx.departments if ctx else [],
@@ -832,42 +734,6 @@ def _build_response(
         "slots": slot_results,
         "total_cost": total_cost,
     }
-
-    # Add agent execution if available
-    if agent_execution:
-        response_dict["agent_execution"] = {
-            "agent_results": [
-                {
-                    "domain_key": r.domain_key,
-                    "department": r.department,
-                    "role_key": r.role_key,
-                    "role": r.role,
-                    "findings": r.findings,
-                    "citations": r.citations,
-                    "confidence": r.confidence,
-                    "flags": r.flags,
-                    "neuron_ids": r.neuron_ids,
-                    "input_tokens": r.input_tokens,
-                    "output_tokens": r.output_tokens,
-                    "cost_usd": r.cost_usd,
-                    "duration_ms": r.duration_ms,
-                    "error": r.error,
-                    "error_message": r.error_message,
-                }
-                for r in agent_execution.agent_results
-            ],
-            "synthesis": agent_execution.synthesis,
-            "coordinator_model": agent_execution.coordinator_model,
-            "escalated_to_opus": agent_execution.escalated_to_opus,
-            "domains_active": agent_execution.domains_active,
-            "coordinator_input_tokens": agent_execution.coordinator_input_tokens,
-            "coordinator_output_tokens": agent_execution.coordinator_output_tokens,
-            "coordinator_cost_usd": agent_execution.coordinator_cost_usd,
-            "total_agents_dispatched": agent_execution.total_agents_dispatched,
-            "total_cost_usd": agent_execution.total_cost_usd,
-        }
-
-    return response_dict
 
 
 async def _update_counters_and_fire(
@@ -909,7 +775,7 @@ async def _execute_slot(
     ctx: PreparedContext | None,
     on_stage: StageCallback = None,
 ) -> dict:
-    """Execute a single slot with its own agent_mode and model configuration.
+    """Execute a single slot with its model configuration.
 
     Returns SlotResult dict with response, tokens, cost, error info.
     Emits per-slot completion events via on_stage callback.
@@ -919,8 +785,6 @@ async def _execute_slot(
 
     mode = slot.get("mode", "haiku_neuron")
     token_budget = slot.get("token_budget", settings.token_budget)
-    agent_mode = slot.get("agent_mode", False)
-    confidence_threshold = slot.get("confidence_threshold", 0.5)
     label = slot.get("label")
 
     # Parse mode: "{model}_{type}" (e.g., "haiku_neuron", "sonnet_raw")
@@ -929,18 +793,11 @@ async def _execute_slot(
     slot_type = parts[1] if len(parts) > 1 else "neuron"
     uses_neurons = slot_type == "neuron"
 
-    # Non-Anthropic models cannot reliably produce agent JSON output;
-    # fall back to direct call path for neuron-enriched non-Anthropic slots
-    anthropic_models = frozenset(("haiku", "sonnet", "opus"))
-    if agent_mode and model_name not in anthropic_models:
-        agent_mode = False
-
     start_time = time.monotonic()
 
     try:
         result_data = await _execute_slot_llm(
-            db, user_message, ctx, model_name, uses_neurons,
-            agent_mode, confidence_threshold, on_stage,
+            db, user_message, ctx, model_name, uses_neurons, on_stage,
         )
 
         duration_ms = round((time.monotonic() - start_time) * 1000)
@@ -958,7 +815,6 @@ async def _execute_slot(
             "token_budget": token_budget,
             "top_k": ctx.neurons_activated if ctx else 0,
             "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
-            "agent_mode": agent_mode,
             "model_version": result_data.get("model_version"),
         }
 
@@ -985,7 +841,7 @@ async def _execute_slot(
 
         return _build_error_slot_result(
             mode, model_name, uses_neurons, token_budget,
-            label, agent_mode, error_msg,
+            label, error_msg,
         )
 
 
@@ -995,41 +851,15 @@ async def _execute_slot_llm(
     ctx: PreparedContext | None,
     model_name: str,
     uses_neurons: bool,
-    agent_mode: bool,
-    confidence_threshold: float,
     on_stage: StageCallback,
 ) -> dict:
     """Run the LLM call for a single slot. Returns unified result dict.
 
-    Three paths: agent orchestration, direct neuron call, or raw baseline.
+    Two paths: direct neuron call or raw baseline.
     All paths return actual API-reported token counts (no estimates).
     """
     assert model_name, "model_name must be non-empty"
     assert isinstance(uses_neurons, bool), "uses_neurons must be a bool"
-
-    if agent_mode and ctx and uses_neurons:
-        # Agent orchestration path — all agents + coordinator use slot's model
-        agent_exec = await _run_agent_pipeline(
-            db, user_message, ctx, confidence_threshold, on_stage, model=model_name,
-        )
-        # Aggregate actual tokens from all agent calls + coordinator
-        input_tokens = (
-            sum(r.input_tokens for r in agent_exec.agent_results)
-            + agent_exec.coordinator_input_tokens
-        )
-        output_tokens = (
-            sum(r.output_tokens for r in agent_exec.agent_results)
-            + agent_exec.coordinator_output_tokens
-        )
-        return {
-            "response_text": agent_exec.synthesis,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": agent_exec.total_cost_usd,
-            "cache_creation": 0,
-            "cache_read": 0,
-            "model_version": agent_exec.coordinator_model,
-        }
 
     if uses_neurons and ctx:
         # Direct call path with neurons — uses slot's model, real API tokens
@@ -1069,7 +899,6 @@ def _build_error_slot_result(
     uses_neurons: bool,
     token_budget: int,
     label: str | None,
-    agent_mode: bool,
     error_msg: str,
 ) -> dict:
     """Build error result dict for a failed slot execution."""
@@ -1089,7 +918,6 @@ def _build_error_slot_result(
         "token_budget": token_budget,
         "top_k": 0,
         "label": label or _eval_slot_label(mode, uses_neurons, token_budget),
-        "agent_mode": agent_mode,
         "error": True,
         "error_message": error_msg,
     }
@@ -1110,17 +938,16 @@ async def execute_query(
     prior_neuron_ids: list[int] | None = None,
     on_stage: StageCallback = None,
 ) -> dict:
-    """Run multi-slot query pipeline (Session 3+).
+    """Run multi-slot query pipeline.
 
     Each slot can independently control:
     - Model (haiku, sonnet, opus)
     - Use neurons (yes/no)
-    - Agent orchestration (yes/no)
     - Token budgets and top_k
 
     Shared pipeline:
     - Single neuron classify → score → spread (shared across all slots)
-    - Each slot executes independently with its own agent_mode
+    - Each slot executes independently
     """
     # Preconditions (JPL Rule 5)
     assert user_message and user_message.strip(), "user_message must be non-empty"
@@ -1131,8 +958,6 @@ async def execute_query(
             "mode": "haiku_neuron",
             "token_budget": settings.token_budget,
             "top_k": settings.top_k_neurons,
-            "agent_mode": True,
-            "confidence_threshold": 0.5,
         }]
 
     # Always run neuron pipeline once (classify → score → spread → assemble)
@@ -1146,7 +971,7 @@ async def execute_query(
     needs_neurons = any(s["mode"] in NEURON_MODES for s in slots)
 
     # Create query record early (before execution)
-    query = _create_query_record(user_message, ctx, needs_neurons=needs_neurons, slot_specs=slots, primary_prompt="", classify_result=classify_result, agent_mode=False)
+    query = _create_query_record(user_message, ctx, needs_neurons=needs_neurons, slot_specs=slots, primary_prompt="", classify_result=classify_result)
     db.add(query)
     await db.flush()
 
@@ -1165,7 +990,6 @@ async def execute_query(
         uses_neurons = slot_type == "neuron"
 
         # Pass ctx only if this slot should receive neuron context
-        # (agent-path execution inside _execute_slot already guards on uses_neurons)
         slot_ctx = ctx if uses_neurons else None
 
         task = _execute_slot(
@@ -1200,7 +1024,6 @@ async def execute_query(
     return _build_response(
         query, ctx, needs_neurons=needs_neurons, all_scored=all_scored, max_top_k=len(all_scored),
         neuron_map=neuron_map, classify_result=classify_result, slot_results=slot_results, total_cost=total_cost,
-        agent_execution=None,
     )
 
 
