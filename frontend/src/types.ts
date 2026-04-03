@@ -602,3 +602,10 @@ export interface IntegrityApplyResult {
 export interface IntegrityBulkResolveResult {
   resolved: Array<{ id: number; status: string }>;
 }
+
+export interface IntegrityProposeResult {
+  proposal_id: number;
+  state: string;
+  item_count: number;
+  gap_source: string;
+}

@@ -112,3 +112,27 @@ class CorvusAttentionItem(Base):
     __table_args__ = (
         CheckConstraint("list_type IN ('watch', 'ignore')", name="ck_attention_list_type"),
     )
+
+
+class CorvusAdvisory(Base):
+    __tablename__ = "corvus_advisories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[str] = mapped_column(String(50), nullable=False)
+    trigger_context: Mapped[str] = mapped_column(Text, nullable=False)
+    guidance: Mapped[str] = mapped_column(Text, nullable=False)
+    top_score: Mapped[float] = mapped_column(Float, nullable=False)
+    neuron_ids_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array of int IDs
+    citations_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array of citation dicts
+    intent: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    departments_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    app_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    session_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("corvus_sessions.id"), nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_corvus_advisories_timestamp", "timestamp"),
+        Index("ix_corvus_advisories_dismissed", "dismissed"),
+    )

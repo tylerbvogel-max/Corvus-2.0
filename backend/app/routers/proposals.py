@@ -164,6 +164,11 @@ async def review_proposal(
     p.reviewed_by = req.reviewer
     p.reviewed_at = datetime.utcnow()
     p.review_notes = req.notes
+
+    # If rejecting an integrity proposal, revert linked findings to open
+    if p.state == "rejected" and p.gap_source and p.gap_source.startswith("integrity_"):
+        await _revert_integrity_findings(db, p.id)
+
     await db.commit()
     await db.refresh(p)
     return _proposal_detail(p)
@@ -316,6 +321,11 @@ async def apply_proposal(
     p.state = "applied"
     p.applied_at = datetime.utcnow()
     p.applied_by = req.applied_by
+
+    # If applying an integrity proposal, resolve linked findings
+    if p.gap_source and p.gap_source.startswith("integrity_"):
+        await _resolve_integrity_findings(db, p.id, req.applied_by)
+
     await db.commit()
 
     # Invalidate adjacency cache if edges were modified
@@ -325,6 +335,36 @@ async def apply_proposal(
 
     await db.refresh(p)
     return _proposal_detail(p)
+
+
+# ── Integrity finding sync ───────────────────────────────────────────
+
+
+async def _revert_integrity_findings(
+    db: AsyncSession, proposal_id: int,
+) -> None:
+    """When an integrity proposal is rejected, revert linked findings to open."""
+    from app.models import IntegrityFinding
+    stmt = select(IntegrityFinding).where(IntegrityFinding.proposal_id == proposal_id)
+    result = await db.execute(stmt)
+    for finding in result.scalars().all():
+        finding.status = "open"
+        finding.proposal_id = None
+        finding.resolution = None
+        finding.resolved_by = None
+        finding.resolved_at = None
+
+
+async def _resolve_integrity_findings(
+    db: AsyncSession, proposal_id: int, applied_by: str,
+) -> None:
+    """When an integrity proposal is applied, mark linked findings as resolved."""
+    from app.models import IntegrityFinding
+    stmt = select(IntegrityFinding).where(IntegrityFinding.proposal_id == proposal_id)
+    result = await db.execute(stmt)
+    for finding in result.scalars().all():
+        finding.status = "resolved"
+        finding.resolved_at = datetime.utcnow()
 
 
 # ── Provenance chain ─────────────────────────────────────────────────

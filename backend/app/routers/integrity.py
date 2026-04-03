@@ -88,6 +88,12 @@ class BulkResolveRequest(BaseModel):
     notes: str = ""
 
 
+class FindingProposeRequest(BaseModel):
+    resolution: str = Field(..., min_length=1, max_length=30)
+    reviewer: str = Field(..., min_length=1, max_length=100)
+    notes: str = ""
+
+
 # ── Scan Endpoints ────────────────────────────────────────────────
 
 
@@ -239,13 +245,51 @@ async def get_finding(finding_id: int, db: AsyncSession = Depends(get_db)):
     return await _finding_detail(db, finding)
 
 
+@router.post("/findings/{finding_id}/propose")
+async def propose_finding(
+    finding_id: int,
+    req: FindingProposeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a proposal from a finding resolution. Graph-modifying
+    resolutions (merged, differentiated, linked, a_correct, b_correct,
+    context_added) flow through the proposal queue for human approval."""
+    from app.services.integrity.proposals import create_integrity_proposal
+    proposal = await create_integrity_proposal(
+        db, finding_id, req.resolution, req.reviewer, req.notes,
+    )
+    return {
+        "proposal_id": proposal.id,
+        "state": proposal.state,
+        "item_count": len(proposal.items) if proposal.items else 0,
+        "gap_source": proposal.gap_source,
+    }
+
+
+# Resolutions that must use /propose instead of /resolve
+_GRAPH_RESOLUTIONS = frozenset({
+    "merged", "differentiated", "linked",
+    "a_correct", "b_correct", "context_added",
+})
+
+
 @router.post("/findings/{finding_id}/resolve")
 async def resolve_finding(
     finding_id: int,
     req: FindingResolveRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Resolve a finding with a chosen action."""
+    """Resolve a finding directly (non-graph actions only).
+
+    Graph-modifying resolutions must use /propose instead.
+    """
+    if req.resolution in _GRAPH_RESOLUTIONS:
+        raise HTTPException(
+            400,
+            f"Resolution '{req.resolution}' modifies the graph — use "
+            f"POST /findings/{finding_id}/propose instead.",
+        )
+
     finding = await db.get(IntegrityFinding, finding_id)
     if not finding:
         raise HTTPException(404, "Finding not found")

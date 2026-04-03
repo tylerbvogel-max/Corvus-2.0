@@ -20,6 +20,8 @@ import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import EngramPage from './components/EngramPage'
 import AdvisorPanel from './components/AdvisorPanel'
+import useScreenCapture from './hooks/useScreenCapture'
+import AdvisorToast from './components/AdvisorToast'
 import ProposalQueuePage from './components/ProposalQueuePage'
 import DocumentIngestPage from './components/DocumentIngestPage'
 import IntegrityPage from './components/IntegrityPage'
@@ -197,6 +199,8 @@ export default function App() {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [advisorOpen, setAdvisorOpen] = useState(false);
+  const [advisorUnread, setAdvisorUnread] = useState(0);
+  const screenCapture = useScreenCapture();
   const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
   const [allTenants, setAllTenants] = useState<TenantSummary[]>([]);
   const [authStatus, setAuthStatus] = useState<'checking' | 'open' | 'valid' | 'needs_key'>('checking');
@@ -383,7 +387,7 @@ export default function App() {
             className="sidebar-settings-btn"
             onClick={() => setAdvisorOpen(o => !o)}
             title="Advisor"
-            style={{ color: advisorOpen ? 'var(--accent)' : undefined }}
+            style={{ color: advisorOpen || screenCapture.isCapturing ? 'var(--accent)' : undefined, position: 'relative' }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="2" fill="currentColor" />
@@ -392,6 +396,18 @@ export default function App() {
               <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
               <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
             </svg>
+            {advisorUnread > 0 && (
+              <span style={{
+                position: 'absolute', top: 1, right: 1,
+                width: advisorUnread > 9 ? 16 : 14, height: 14,
+                borderRadius: 7, background: '#ef4444',
+                color: '#fff', fontSize: '0.55rem', fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                lineHeight: 1,
+              }}>
+                {advisorUnread > 9 ? '9+' : advisorUnread}
+              </span>
+            )}
           </button>
           <button
             className="sidebar-settings-btn"
@@ -435,7 +451,8 @@ export default function App() {
       )}
       <main className="app-main">
         {tab === 'home' && <HomePage onNavigate={k => setTab(k as Tab)} />}
-        <AdvisorPanel open={advisorOpen} onClose={() => setAdvisorOpen(false)} />
+        <AdvisorPanel open={advisorOpen} onClose={() => setAdvisorOpen(false)} screenCapture={screenCapture} />
+        <AdvisorToast panelOpen={advisorOpen} onOpenPanel={() => setAdvisorOpen(true)} onUnreadChange={setAdvisorUnread} />
         {tab === 'explorer' && <Explorer navigateToNeuronId={explorerNeuronId} onNavigateHandled={() => setExplorerNeuronId(null)} />}
         {tab === 'engrams' && <EngramPage />}
         {tab === 'graph' && <CirclePacking />}

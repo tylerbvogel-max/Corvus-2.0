@@ -15,6 +15,7 @@ from app.database import async_session
 from app.models_corvus import (
     CorvusCapture, CorvusInterpretation, CorvusKnownApp, CorvusSession,
     CorvusAlertRule, CorvusEntity, CorvusCustomApp, CorvusAttentionItem,
+    CorvusAdvisory,
 )
 from app.corvus.capture import (
     process_frame, capture_state,
@@ -715,3 +716,95 @@ async def test_ygg_context(text: str = Form("reviewing FAR 52.219 subcontracting
     if result:
         return {"status": "ok", "context_length": len(result), "context_preview": result[:500]}
     return {"status": "no_result", "reason": "No context returned"}
+
+
+# --- Advisor endpoints ---
+
+
+@router.get("/settings/advisor")
+async def get_advisor_settings():
+    """Return current advisor mode settings."""
+    return {
+        "enabled": interpreter_mod.interpreter_state.advisor_enabled,
+        "threshold": interpreter_mod.interpreter_state.advisor_threshold,
+    }
+
+
+@router.post("/settings/advisor")
+async def update_advisor_settings(
+    enabled: str = Form(""),
+    threshold: str = Form(""),
+):
+    """Toggle advisor mode and set relevance threshold."""
+    if enabled:
+        interpreter_mod.interpreter_state.advisor_enabled = enabled.lower() in ("true", "1", "yes")
+    if threshold:
+        val = float(threshold)
+        assert 0.0 <= val <= 1.0, f"threshold must be 0.0-1.0, got {val}"
+        interpreter_mod.interpreter_state.advisor_threshold = val
+    return {
+        "enabled": interpreter_mod.interpreter_state.advisor_enabled,
+        "threshold": interpreter_mod.interpreter_state.advisor_threshold,
+    }
+
+
+@router.get("/advisories")
+async def list_advisories(limit: int = 20, include_dismissed: bool = False):
+    """List recent advisories, newest first."""
+    async with async_session() as db:
+        stmt = select(CorvusAdvisory).order_by(CorvusAdvisory.created_at.desc())
+        if not include_dismissed:
+            stmt = stmt.where(CorvusAdvisory.dismissed.is_(False))
+        stmt = stmt.limit(min(limit, 100))
+        rows = (await db.execute(stmt)).scalars().all()
+
+    return [_serialize_advisory(a) for a in rows]
+
+
+@router.get("/advisories/current")
+async def get_current_advisory():
+    """Return the most recent undismissed advisory, or null."""
+    async with async_session() as db:
+        stmt = (
+            select(CorvusAdvisory)
+            .where(CorvusAdvisory.dismissed.is_(False))
+            .order_by(CorvusAdvisory.created_at.desc())
+            .limit(1)
+        )
+        row = (await db.execute(stmt)).scalar_one_or_none()
+
+    if row is None:
+        return None
+    return _serialize_advisory(row)
+
+
+@router.post("/advisories/{advisory_id}/dismiss")
+async def dismiss_advisory(advisory_id: int):
+    """Mark an advisory as dismissed."""
+    async with async_session() as db:
+        stmt = select(CorvusAdvisory).where(CorvusAdvisory.id == advisory_id)
+        advisory = (await db.execute(stmt)).scalar_one_or_none()
+        if advisory is None:
+            raise HTTPException(status_code=404, detail="Advisory not found")
+        advisory.dismissed = True
+        await db.commit()
+    return {"status": "dismissed", "id": advisory_id}
+
+
+def _serialize_advisory(a: CorvusAdvisory) -> dict:
+    """Convert CorvusAdvisory row to API response dict."""
+    return {
+        "id": a.id,
+        "timestamp": a.timestamp,
+        "trigger_context": a.trigger_context,
+        "guidance": a.guidance,
+        "top_score": a.top_score,
+        "neuron_ids": json.loads(a.neuron_ids_json) if a.neuron_ids_json else [],
+        "citations": json.loads(a.citations_json) if a.citations_json else [],
+        "intent": a.intent,
+        "departments": json.loads(a.departments_json) if a.departments_json else [],
+        "app_id": a.app_id,
+        "dismissed": a.dismissed,
+        "cost_usd": a.cost_usd,
+        "created_at": str(a.created_at) if a.created_at else None,
+    }

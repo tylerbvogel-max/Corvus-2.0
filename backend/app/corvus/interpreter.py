@@ -141,6 +141,8 @@ class InterpreterState:
     _last_interpretation_time: float = 0.0
     _last_app_id: str | None = None
     _last_interrupt_decision: str = "active"
+    advisor_enabled: bool = False
+    advisor_threshold: float = 0.5
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -876,6 +878,23 @@ def get_attention() -> dict:
 MAX_LOOP_ITERATIONS = 10_000_000  # ~115 days at 1s interval — safety bound (JPL-2)
 
 
+async def _dispatch_trigger(trigger: str) -> None:
+    """Route trigger to advisor or interpreter based on mode."""
+    if interpreter_state.advisor_enabled:
+        from .advisor import run_advisory_check
+        result = await run_advisory_check(
+            trigger,
+            threshold=interpreter_state.advisor_threshold,
+            session_id=interpreter_state._active_session_id,
+        )
+        if result:
+            print(f"[Corvus Advisor] {result['guidance'][:120]}")
+    else:
+        result = await run_interpretation(trigger)
+        if result:
+            print(f"[Corvus] {result[:120]}")
+
+
 async def interpretation_loop():
     """Event-driven interpretation loop. Checks triggers every few seconds."""
 
@@ -913,9 +932,7 @@ async def interpretation_loop():
                 if decision == "defer":
                     continue
 
-                result = await run_interpretation(trigger)
-                if result:
-                    print(f"[Corvus] App switch: {result[:120]}")
+                await _dispatch_trigger(trigger)
                 continue
 
             interpreter_state._last_app_id = current_app
@@ -930,9 +947,7 @@ async def interpretation_loop():
                     if decision == "defer":
                         continue
 
-                    result = await run_interpretation(trigger)
-                    if result:
-                        print(f"[Corvus] Threshold: {result[:120]}")
+                    await _dispatch_trigger(trigger)
                     continue
 
             # Trigger: time cap with adaptive cadence
@@ -945,9 +960,7 @@ async def interpretation_loop():
                 if decision == "defer":
                     continue
 
-                result = await run_interpretation(trigger)
-                if result:
-                    print(f"[Corvus] Time cap: {result[:120]}")
+                await _dispatch_trigger(trigger)
                 continue
 
         except Exception as e:

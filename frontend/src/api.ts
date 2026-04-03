@@ -32,6 +32,7 @@ import type {
   IntegrityFindingDetail,
   IntegrityApplyResult,
   IntegrityBulkResolveResult,
+  IntegrityProposeResult,
 } from './types';
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1864,6 +1865,16 @@ export function dismissIntegrityFinding(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reviewer, notes: notes || '' }),
+  });
+}
+
+export function proposeIntegrityFinding(
+  findingId: number, resolution: string, reviewer: string, notes?: string,
+): Promise<IntegrityProposeResult> {
+  return json<IntegrityProposeResult>(`/admin/integrity/findings/${findingId}/propose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution, reviewer, notes: notes || '' }),
   });
 }
 
