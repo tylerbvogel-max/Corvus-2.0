@@ -904,6 +904,7 @@ async def record_firing(
     neuron = await db.get(Neuron, neuron_id)
     if neuron:
         neuron.invocations = (neuron.invocations or 0) + 1
+        neuron.last_accessed_at = firing.created_at
 
     return firing
 

@@ -24,6 +24,14 @@ import type {
   ObservationEvalResponse,
   ObservationApplyResponse,
   NeuronScoreResponse,
+  IntegrityDashboard,
+  IntegrityScanSummary,
+  IntegrityScanDetail,
+  IntegrityScanResponse,
+  IntegrityFinding,
+  IntegrityFindingDetail,
+  IntegrityApplyResult,
+  IntegrityBulkResolveResult,
 } from './types';
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1738,4 +1746,133 @@ export function fetchDocumentStructure(jobId: string): Promise<DocumentStructure
 
 export function cancelDocumentJob(jobId: string): Promise<DocumentIngestJob> {
   return json<DocumentIngestJob>(`/admin/documents/${jobId}/cancel`, { method: 'POST' });
+}
+
+// ── Integrity System ──────────────────────────────────────────────
+
+export function fetchIntegrityDashboard(): Promise<IntegrityDashboard> {
+  return json<IntegrityDashboard>('/admin/integrity/dashboard');
+}
+
+export function runHomeostasisScan(params: {
+  scope?: string; scale_factor?: number; floor_threshold?: number; initiated_by?: string;
+}): Promise<IntegrityScanResponse> {
+  return json<IntegrityScanResponse>('/admin/integrity/homeostasis/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function runDuplicatesScan(params: {
+  scope?: string; similarity_threshold?: number; max_pairs?: number;
+  cross_department_only?: boolean; initiated_by?: string;
+}): Promise<IntegrityScanResponse> {
+  return json<IntegrityScanResponse>('/admin/integrity/duplicates/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function runConnectionsScan(params: {
+  scope?: string; similarity_threshold?: number; max_suggestions?: number;
+  exclude_same_parent?: boolean; initiated_by?: string;
+}): Promise<IntegrityScanResponse> {
+  return json<IntegrityScanResponse>('/admin/integrity/connections/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function runConflictsScan(params: {
+  scope?: string; sim_min?: number; sim_max?: number;
+  batch_size?: number; max_pairs?: number; initiated_by?: string;
+}): Promise<IntegrityScanResponse> {
+  return json<IntegrityScanResponse>('/admin/integrity/conflicts/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function runAgingScan(params: {
+  scope?: string; staleness_overrides?: Record<string, number> | null;
+  include_never_verified?: boolean; min_invocations?: number; initiated_by?: string;
+}): Promise<IntegrityScanResponse> {
+  return json<IntegrityScanResponse>('/admin/integrity/aging/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function applyHomeostasisScan(scanId: number, reviewer: string): Promise<IntegrityApplyResult> {
+  return json<IntegrityApplyResult>(`/admin/integrity/homeostasis/${scanId}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reviewer }),
+  });
+}
+
+export function fetchIntegrityScans(params?: {
+  scan_type?: string; status?: string; limit?: number;
+}): Promise<IntegrityScanSummary[]> {
+  const qs = new URLSearchParams();
+  if (params?.scan_type) qs.set('scan_type', params.scan_type);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.limit) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return json<IntegrityScanSummary[]>(`/admin/integrity/scans${q ? '?' + q : ''}`);
+}
+
+export function fetchIntegrityScanDetail(scanId: number): Promise<IntegrityScanDetail> {
+  return json<IntegrityScanDetail>(`/admin/integrity/scans/${scanId}`);
+}
+
+export function fetchIntegrityFindings(params?: {
+  finding_type?: string; status?: string; severity?: string; limit?: number;
+}): Promise<IntegrityFinding[]> {
+  const qs = new URLSearchParams();
+  if (params?.finding_type) qs.set('finding_type', params.finding_type);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.severity) qs.set('severity', params.severity);
+  if (params?.limit) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return json<IntegrityFinding[]>(`/admin/integrity/findings${q ? '?' + q : ''}`);
+}
+
+export function fetchIntegrityFindingDetail(findingId: number): Promise<IntegrityFindingDetail> {
+  return json<IntegrityFindingDetail>(`/admin/integrity/findings/${findingId}`);
+}
+
+export function resolveIntegrityFinding(
+  findingId: number, resolution: string, reviewer: string, notes?: string,
+): Promise<IntegrityFinding> {
+  return json<IntegrityFinding>(`/admin/integrity/findings/${findingId}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution, reviewer, notes: notes || '' }),
+  });
+}
+
+export function dismissIntegrityFinding(
+  findingId: number, reviewer: string, notes?: string,
+): Promise<IntegrityFinding> {
+  return json<IntegrityFinding>(`/admin/integrity/findings/${findingId}/dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reviewer, notes: notes || '' }),
+  });
+}
+
+export function bulkResolveIntegrityFindings(
+  findingIds: number[], resolution: string, reviewer: string, notes?: string,
+): Promise<IntegrityBulkResolveResult> {
+  return json<IntegrityBulkResolveResult>('/admin/integrity/findings/bulk-resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ finding_ids: findingIds, resolution, reviewer, notes: notes || '' }),
+  });
 }

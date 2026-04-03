@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
 from app.models import (
-    AutopilotProposal, ProposalItem, Neuron, NeuronRefinement,
+    AutopilotProposal, ProposalItem, Neuron, NeuronEdge, NeuronRefinement,
     NeuronSourceLink, EmergentQueue, Query,
 )
 from app.schemas import (
@@ -238,6 +238,50 @@ async def _apply_create_item(
     item.refinement_id = ref.id
 
 
+async def _apply_rescale_item(
+    db: AsyncSession, item: ProposalItem,
+) -> None:
+    """Apply a single edge weight rescale item."""
+    assert item.neuron_spec_json is not None, "rescale item must have spec"
+    spec = json.loads(item.neuron_spec_json)
+    source_id = spec["source_id"]
+    target_id = spec["target_id"]
+    new_weight = spec["new_weight"]
+
+    edge = await db.get(NeuronEdge, (source_id, target_id))
+    if edge:
+        edge.weight = new_weight
+        edge.last_adjusted = datetime.utcnow()
+
+
+async def _apply_link_item(
+    db: AsyncSession, item: ProposalItem,
+) -> None:
+    """Apply a new edge creation (pattern completion)."""
+    assert item.neuron_spec_json is not None, "link item must have spec"
+    spec = json.loads(item.neuron_spec_json)
+
+    edge = NeuronEdge(
+        source_id=spec["source_id"],
+        target_id=spec["target_id"],
+        weight=spec.get("initial_weight", 0.15),
+        co_fire_count=1,
+        edge_type=spec.get("edge_type", "pyramidal"),
+        source=spec.get("source", "integrity_completion"),
+        context=spec.get("context", ""),
+    )
+    db.add(edge)
+
+
+async def _apply_merge_item(
+    db: AsyncSession, item: ProposalItem, proposal_id: int, query_id: int | None,
+) -> None:
+    """Apply a merge action — delegates to update (content merge or deactivation)."""
+    # Merge is implemented as sequential update items (content update + deactivation).
+    # This handler delegates to _apply_update_item for each sub-operation.
+    await _apply_update_item(db, item, proposal_id, query_id)
+
+
 @router.post("/{proposal_id}/apply", response_model=ProposalDetailOut)
 async def apply_proposal(
     proposal_id: int,
@@ -254,16 +298,31 @@ async def apply_proposal(
     from app.services.neuron_service import get_system_state
     state = await get_system_state(db)
 
+    has_edge_changes = False
     for item in (p.items or []):
         if item.action == "update" and item.target_neuron_id:
             await _apply_update_item(db, item, p.id, p.query_id)
         elif item.action == "create" and item.neuron_spec_json:
             await _apply_create_item(db, item, p.id, p.query_id, state.total_queries)
+        elif item.action == "rescale" and item.neuron_spec_json:
+            await _apply_rescale_item(db, item)
+            has_edge_changes = True
+        elif item.action == "link" and item.neuron_spec_json:
+            await _apply_link_item(db, item)
+            has_edge_changes = True
+        elif item.action == "merge" and item.target_neuron_id:
+            await _apply_merge_item(db, item, p.id, p.query_id)
 
     p.state = "applied"
     p.applied_at = datetime.utcnow()
     p.applied_by = req.applied_by
     await db.commit()
+
+    # Invalidate adjacency cache if edges were modified
+    if has_edge_changes:
+        from app.services.adjacency_cache import invalidate_adjacency_cache
+        invalidate_adjacency_cache()
+
     await db.refresh(p)
     return _proposal_detail(p)
 

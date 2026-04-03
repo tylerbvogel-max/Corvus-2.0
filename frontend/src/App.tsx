@@ -19,17 +19,17 @@ import KnowledgeGovernancePage from './components/KnowledgeGovernancePage'
 import HomePage from './components/HomePage'
 import SystemUseBanner from './components/SystemUseBanner'
 import EngramPage from './components/EngramPage'
-import CorvusPage from './components/CorvusPage'
-import ObservationReviewPage from './components/ObservationReviewPage'
+import AdvisorPanel from './components/AdvisorPanel'
 import ProposalQueuePage from './components/ProposalQueuePage'
 import DocumentIngestPage from './components/DocumentIngestPage'
+import IntegrityPage from './components/IntegrityPage'
 import GroupLandingPage from './components/GroupLandingPage'
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 import { checkAccess, setAccessKey, getAccessKey } from './auth'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'proposal-queue' | 'emergent-queue' | 'document-ingest' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations' | 'query-landing' | 'autopilot-landing' | 'knowledge-landing' | 'evaluate-landing' | 'history-landing';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'proposal-queue' | 'emergent-queue' | 'document-ingest' | 'integrity' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations' | 'query-landing' | 'autopilot-landing' | 'knowledge-landing' | 'evaluate-landing' | 'history-landing';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -134,6 +134,7 @@ function buildNavGroups(tenantId: string | undefined): NavGroup[] {
         { key: 'proposal-queue', label: 'Proposal Queue', description: 'Review and approve autopilot proposals' },
         { key: 'emergent-queue', label: 'Emergent Queue', description: 'Unresolved patterns awaiting classification' },
         { key: 'document-ingest', label: 'Document Ingest', description: 'Upload documents for bulk knowledge extraction' },
+        { key: 'integrity', label: 'Integrity', description: 'Graph consistency audits and findings' },
       ],
     },
     {
@@ -195,6 +196,7 @@ export default function App() {
   );
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [advisorOpen, setAdvisorOpen] = useState(false);
   const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
   const [allTenants, setAllTenants] = useState<TenantSummary[]>([]);
   const [authStatus, setAuthStatus] = useState<'checking' | 'open' | 'valid' | 'needs_key'>('checking');
@@ -375,8 +377,22 @@ export default function App() {
             <a href="https://github.com/tylerbvogel-max/Corvus-2.0" target="_blank" rel="noopener noreferrer" style={{ fontFamily: 'monospace', fontSize: '10px', opacity: 0.5, color: 'inherit', textDecoration: 'none' }} onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')} onMouseLeave={e => (e.currentTarget.style.opacity = '0.5')}>github.com/tylerbvogel-max/Corvus-2.0</a>
           </div>
         )}
-        {/* Settings gear — always visible, even when collapsed */}
+        {/* Advisor + Settings — always visible, even when collapsed */}
         <div className="sidebar-settings-area">
+          <button
+            className="sidebar-settings-btn"
+            onClick={() => setAdvisorOpen(o => !o)}
+            title="Advisor"
+            style={{ color: advisorOpen ? 'var(--accent)' : undefined }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="2" fill="currentColor" />
+              <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
+              <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+            </svg>
+          </button>
           <button
             className="sidebar-settings-btn"
             onClick={() => setThemeMenuOpen(o => !o)}
@@ -419,8 +435,7 @@ export default function App() {
       )}
       <main className="app-main">
         {tab === 'home' && <HomePage onNavigate={k => setTab(k as Tab)} />}
-        {tab === 'corvus-feed' && <CorvusPage />}
-        {tab === 'corvus-observations' && <ObservationReviewPage />}
+        <AdvisorPanel open={advisorOpen} onClose={() => setAdvisorOpen(false)} />
         {tab === 'explorer' && <Explorer navigateToNeuronId={explorerNeuronId} onNavigateHandled={() => setExplorerNeuronId(null)} />}
         {tab === 'engrams' && <EngramPage />}
         {tab === 'graph' && <CirclePacking />}
@@ -435,6 +450,7 @@ export default function App() {
         {tab === 'proposal-queue' && <ProposalQueuePage />}
         {tab === 'emergent-queue' && <EmergentQueuePage />}
         {tab === 'document-ingest' && <DocumentIngestPage />}
+        {tab === 'integrity' && <IntegrityPage />}
         {tab === 'synaptic-learning' && <SynapticLearningPage />}
         {tab === 'quality' && <QualityPage />}
         {tab === 'fairness' && <FairnessPage />}

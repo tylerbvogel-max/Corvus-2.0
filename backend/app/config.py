@@ -106,6 +106,17 @@ class Settings(BaseSettings):
     engram_token_budget_fraction: float = 0.25
     engram_fallback_on_api_failure: bool = True
     engram_haiku_extract_threshold: int = 2000
+    # Graph integrity (neurological self-correcting processes)
+    integrity_homeostasis_default_scale: float = 0.8
+    integrity_homeostasis_floor_threshold: float = 0.05
+    integrity_duplicate_threshold: float = 0.92
+    integrity_completion_threshold: float = 0.65
+    integrity_conflict_sim_min: float = 0.60
+    integrity_conflict_sim_max: float = 0.85
+    integrity_aging_regulatory_days: int = 1095
+    integrity_aging_operational_days: int = 548
+    integrity_aging_default_days: int = 730
+    integrity_max_scan_neurons: int = 10_000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

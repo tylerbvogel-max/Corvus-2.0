@@ -517,3 +517,88 @@ export interface ObservationApplyResponse {
   merged: number;
   created_neuron_ids: number[];
 }
+
+// ── Integrity System ──────────────────────────────────────────────
+
+export interface IntegrityScanSummary {
+  id: number;
+  scan_type: string;
+  scope: string;
+  status: string;
+  findings_count: number;
+  initiated_by: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface IntegrityFinding {
+  id: number;
+  scan_id: number;
+  finding_type: string;
+  severity: string;
+  priority_score: number;
+  description: string;
+  status: string;
+  resolution: string | null;
+  proposal_id: number | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  neuron_ids: number[];
+  created_at: string | null;
+}
+
+export interface IntegrityNeuronSnapshot {
+  id: number;
+  label: string;
+  department: string | null;
+  layer: number;
+  content: string | null;
+  summary: string | null;
+  source_type: string | null;
+  source_origin: string | null;
+  invocations: number;
+}
+
+export interface IntegrityFindingDetail extends IntegrityFinding {
+  detail: Record<string, unknown>;
+  edge_ids: number[][];
+  neurons: Record<string, IntegrityNeuronSnapshot>;
+}
+
+export interface IntegrityScanDetail extends IntegrityScanSummary {
+  parameters: Record<string, unknown>;
+  findings: IntegrityFinding[];
+}
+
+export interface IntegrityWeightDistribution {
+  count: number;
+  mean: number;
+  median: number;
+  std: number;
+  p10: number;
+  p25: number;
+  p75: number;
+  p90: number;
+  max: number;
+}
+
+export interface IntegrityScanResponse extends IntegrityScanSummary {
+  [key: string]: unknown;
+}
+
+export interface IntegrityDashboard {
+  open_findings_total: number;
+  open_by_type: Record<string, number>;
+  open_by_severity: Record<string, number>;
+  recent_scans: IntegrityScanSummary[];
+}
+
+export interface IntegrityApplyResult {
+  proposal_id: number;
+  state: string;
+  item_count: number;
+}
+
+export interface IntegrityBulkResolveResult {
+  resolved: Array<{ id: number; status: string }>;
+}

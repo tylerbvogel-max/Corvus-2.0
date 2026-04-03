@@ -1,0 +1,433 @@
+"""Graph integrity router — scan, review, and resolve findings.
+
+Endpoints for all five integrity processes (homeostasis, duplicate detection,
+missing connections, conflict monitoring, aging review) plus finding
+management and dashboard aggregation.
+
+All scans are dry-run by default. Graph modifications flow through the
+standard AutopilotProposal → approve → apply workflow.
+"""
+
+import json
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models import IntegrityScan, IntegrityFinding, Neuron
+
+
+router = APIRouter(prefix="/admin/integrity", tags=["integrity"])
+
+
+# ── Request / Response Schemas ────────────────────────────────────
+
+
+class HomeostasisScanRequest(BaseModel):
+    scope: str = "global"
+    scale_factor: float = Field(0.8, gt=0.0, le=1.0)
+    floor_threshold: float = Field(0.05, ge=0.0)
+    initiated_by: str = "admin"
+
+
+class DuplicateScanRequest(BaseModel):
+    scope: str = "global"
+    similarity_threshold: float = Field(0.92, gt=0.0, le=1.0)
+    max_pairs: int = Field(100, ge=1, le=500)
+    cross_department_only: bool = False
+    initiated_by: str = "admin"
+
+
+class ConnectionScanRequest(BaseModel):
+    scope: str = "global"
+    similarity_threshold: float = Field(0.65, gt=0.0, le=1.0)
+    max_suggestions: int = Field(50, ge=1, le=500)
+    exclude_same_parent: bool = True
+    initiated_by: str = "admin"
+
+
+class ConflictScanRequest(BaseModel):
+    scope: str = "global"
+    sim_min: float = Field(0.60, ge=0.0, le=1.0)
+    sim_max: float = Field(0.85, ge=0.0, le=1.0)
+    batch_size: int = Field(5, ge=1, le=20)
+    max_pairs: int = Field(200, ge=1, le=1000)
+    initiated_by: str = "admin"
+
+
+class AgingScanRequest(BaseModel):
+    scope: str = "global"
+    staleness_overrides: dict | None = None
+    include_never_verified: bool = True
+    min_invocations: int = Field(0, ge=0)
+    initiated_by: str = "admin"
+
+
+class HomeostasisApplyRequest(BaseModel):
+    reviewer: str = Field(..., min_length=1, max_length=100)
+
+
+class FindingResolveRequest(BaseModel):
+    resolution: str = Field(..., min_length=1, max_length=30)
+    reviewer: str = Field(..., min_length=1, max_length=100)
+    notes: str = ""
+
+
+class FindingDismissRequest(BaseModel):
+    reviewer: str = Field(..., min_length=1, max_length=100)
+    notes: str = ""
+
+
+class BulkResolveRequest(BaseModel):
+    finding_ids: list[int] = Field(..., max_length=50)
+    resolution: str = Field(..., min_length=1, max_length=30)
+    reviewer: str = Field(..., min_length=1, max_length=100)
+    notes: str = ""
+
+
+# ── Scan Endpoints ────────────────────────────────────────────────
+
+
+@router.post("/homeostasis/scan")
+async def scan_homeostasis_endpoint(
+    req: HomeostasisScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Dry-run weight renormalization scan."""
+    from app.services.integrity.homeostasis import scan_homeostasis
+    scan, result = await scan_homeostasis(
+        db, scope=req.scope, scale_factor=req.scale_factor,
+        floor_threshold=req.floor_threshold, initiated_by=req.initiated_by,
+    )
+    return _scan_response(scan, result.extra)
+
+
+@router.post("/homeostasis/{scan_id}/apply")
+async def apply_homeostasis_endpoint(
+    scan_id: int,
+    req: HomeostasisApplyRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create proposal from homeostasis scan for human review."""
+    from app.services.integrity.homeostasis import apply_homeostasis
+    proposal = await apply_homeostasis(db, scan_id, reviewer=req.reviewer)
+    return {"proposal_id": proposal.id, "state": proposal.state,
+            "item_count": len(proposal.items) if proposal.items else 0}
+
+
+@router.post("/duplicates/scan")
+async def scan_duplicates_endpoint(
+    req: DuplicateScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Find near-duplicate neurons using embedding similarity."""
+    from app.services.integrity.pattern_separation import scan_duplicates
+    scan, result = await scan_duplicates(
+        db, scope=req.scope, similarity_threshold=req.similarity_threshold,
+        max_pairs=req.max_pairs, cross_department_only=req.cross_department_only,
+        initiated_by=req.initiated_by,
+    )
+    return _scan_response(scan, result.extra)
+
+
+@router.post("/connections/scan")
+async def scan_connections_endpoint(
+    req: ConnectionScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Find missing semantic connections between neurons."""
+    from app.services.integrity.pattern_completion import scan_missing_connections
+    scan, result = await scan_missing_connections(
+        db, scope=req.scope, similarity_threshold=req.similarity_threshold,
+        max_suggestions=req.max_suggestions,
+        exclude_same_parent=req.exclude_same_parent,
+        initiated_by=req.initiated_by,
+    )
+    return _scan_response(scan, result.extra)
+
+
+@router.post("/conflicts/scan")
+async def scan_conflicts_endpoint(
+    req: ConflictScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Detect contradictions via embedding prefilter + LLM classification."""
+    from app.services.integrity.conflict_monitor import scan_contradictions
+    scan, result = await scan_contradictions(
+        db, scope=req.scope, sim_min=req.sim_min, sim_max=req.sim_max,
+        batch_size=req.batch_size, max_pairs=req.max_pairs,
+        initiated_by=req.initiated_by,
+    )
+    return _scan_response(scan, result.extra)
+
+
+@router.post("/aging/scan")
+async def scan_aging_endpoint(
+    req: AgingScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Surface neurons with stale content for human review."""
+    from app.services.integrity.aging_review import scan_stale_neurons
+    scan, result = await scan_stale_neurons(
+        db, scope=req.scope, staleness_overrides=req.staleness_overrides,
+        include_never_verified=req.include_never_verified,
+        min_invocations=req.min_invocations, initiated_by=req.initiated_by,
+    )
+    return _scan_response(scan, result.extra)
+
+
+# ── Scan & Finding Management ────────────────────────────────────
+
+
+@router.get("/scans")
+async def list_scans(
+    scan_type: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    """List integrity scans, optionally filtered."""
+    stmt = select(IntegrityScan).order_by(IntegrityScan.id.desc())
+    if scan_type:
+        stmt = stmt.where(IntegrityScan.scan_type == scan_type)
+    if status:
+        stmt = stmt.where(IntegrityScan.status == status)
+    stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return [_scan_summary(s) for s in result.scalars().all()]
+
+
+@router.get("/scans/{scan_id}")
+async def get_scan(scan_id: int, db: AsyncSession = Depends(get_db)):
+    """Scan detail with all findings."""
+    scan = await db.get(IntegrityScan, scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    return _scan_detail(scan)
+
+
+@router.get("/findings")
+async def list_findings(
+    finding_type: str | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    """List findings with optional filters."""
+    stmt = select(IntegrityFinding).order_by(IntegrityFinding.priority_score.desc())
+    if finding_type:
+        stmt = stmt.where(IntegrityFinding.finding_type == finding_type)
+    if status:
+        stmt = stmt.where(IntegrityFinding.status == status)
+    if severity:
+        stmt = stmt.where(IntegrityFinding.severity == severity)
+    stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return [_finding_out(f) for f in result.scalars().all()]
+
+
+@router.get("/findings/{finding_id}")
+async def get_finding(finding_id: int, db: AsyncSession = Depends(get_db)):
+    """Finding detail with full neuron content."""
+    finding = await db.get(IntegrityFinding, finding_id)
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    return await _finding_detail(db, finding)
+
+
+@router.post("/findings/{finding_id}/resolve")
+async def resolve_finding(
+    finding_id: int,
+    req: FindingResolveRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve a finding with a chosen action."""
+    finding = await db.get(IntegrityFinding, finding_id)
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    if finding.status not in ("open", "proposed"):
+        raise HTTPException(400, f"Cannot resolve finding in status '{finding.status}'")
+
+    finding.status = "resolved"
+    finding.resolution = req.resolution
+    finding.resolved_by = req.reviewer
+    finding.resolved_at = datetime.utcnow()
+
+    # For aging review "reviewed" resolution, update the neuron's last_verified
+    if finding.finding_type == "stale_content" and req.resolution == "reviewed":
+        await _mark_neurons_verified(db, finding)
+
+    await db.commit()
+    return _finding_out(finding)
+
+
+@router.post("/findings/{finding_id}/dismiss")
+async def dismiss_finding(
+    finding_id: int,
+    req: FindingDismissRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Dismiss a finding (acknowledged, no action needed)."""
+    finding = await db.get(IntegrityFinding, finding_id)
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+
+    finding.status = "dismissed"
+    finding.resolution = "dismissed"
+    finding.resolved_by = req.reviewer
+    finding.resolved_at = datetime.utcnow()
+
+    # Dismissing a stale finding also updates last_verified
+    if finding.finding_type == "stale_content":
+        await _mark_neurons_verified(db, finding)
+
+    await db.commit()
+    return _finding_out(finding)
+
+
+@router.post("/findings/bulk-resolve")
+async def bulk_resolve_findings(
+    req: BulkResolveRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch-resolve multiple findings."""
+    results = []
+    for fid in req.finding_ids:
+        finding = await db.get(IntegrityFinding, fid)
+        if finding and finding.status in ("open", "proposed"):
+            finding.status = "resolved"
+            finding.resolution = req.resolution
+            finding.resolved_by = req.reviewer
+            finding.resolved_at = datetime.utcnow()
+            if finding.finding_type == "stale_content" and req.resolution == "reviewed":
+                await _mark_neurons_verified(db, finding)
+            results.append({"id": fid, "status": "resolved"})
+        else:
+            results.append({"id": fid, "status": "skipped"})
+    await db.commit()
+    return {"resolved": results}
+
+
+@router.get("/dashboard")
+async def integrity_dashboard(db: AsyncSession = Depends(get_db)):
+    """Aggregate stats: open findings by type, recent scans."""
+    # Open findings by type
+    type_counts = await db.execute(
+        select(IntegrityFinding.finding_type, func.count(IntegrityFinding.id))
+        .where(IntegrityFinding.status == "open")
+        .group_by(IntegrityFinding.finding_type)
+    )
+    open_by_type = {row[0]: row[1] for row in type_counts.all()}
+
+    # Open findings by severity
+    sev_counts = await db.execute(
+        select(IntegrityFinding.severity, func.count(IntegrityFinding.id))
+        .where(IntegrityFinding.status == "open")
+        .group_by(IntegrityFinding.severity)
+    )
+    open_by_severity = {row[0]: row[1] for row in sev_counts.all()}
+
+    # Total open
+    total_open = sum(open_by_type.values())
+
+    # Recent scans (last 10)
+    recent = await db.execute(
+        select(IntegrityScan).order_by(IntegrityScan.id.desc()).limit(10)
+    )
+    recent_scans = [_scan_summary(s) for s in recent.scalars().all()]
+
+    return {
+        "open_findings_total": total_open,
+        "open_by_type": open_by_type,
+        "open_by_severity": open_by_severity,
+        "recent_scans": recent_scans,
+    }
+
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+
+async def _mark_neurons_verified(
+    db: AsyncSession, finding: IntegrityFinding,
+) -> None:
+    """Update last_verified on neurons referenced by a finding."""
+    if not finding.neuron_ids_json:
+        return
+    neuron_ids = json.loads(finding.neuron_ids_json)
+    now = datetime.utcnow()
+    for nid in neuron_ids:
+        neuron = await db.get(Neuron, nid)
+        if neuron:
+            neuron.last_verified = now
+
+
+def _scan_summary(scan: IntegrityScan) -> dict:
+    """Compact scan representation for lists."""
+    return {
+        "id": scan.id, "scan_type": scan.scan_type,
+        "scope": scan.scope, "status": scan.status,
+        "findings_count": scan.findings_count,
+        "initiated_by": scan.initiated_by,
+        "started_at": scan.started_at.isoformat() if scan.started_at else None,
+        "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+    }
+
+
+def _scan_detail(scan: IntegrityScan) -> dict:
+    """Full scan with findings."""
+    return {
+        **_scan_summary(scan),
+        "parameters": json.loads(scan.parameters_json) if scan.parameters_json else {},
+        "findings": [_finding_out(f) for f in (scan.findings or [])],
+    }
+
+
+def _scan_response(scan: IntegrityScan, extra: dict) -> dict:
+    """Scan response combining summary and extra data."""
+    return {**_scan_summary(scan), **extra}
+
+
+def _finding_out(finding: IntegrityFinding) -> dict:
+    """Compact finding representation."""
+    return {
+        "id": finding.id, "scan_id": finding.scan_id,
+        "finding_type": finding.finding_type,
+        "severity": finding.severity,
+        "priority_score": finding.priority_score,
+        "description": finding.description,
+        "status": finding.status,
+        "resolution": finding.resolution,
+        "proposal_id": finding.proposal_id,
+        "resolved_by": finding.resolved_by,
+        "resolved_at": finding.resolved_at.isoformat() if finding.resolved_at else None,
+        "neuron_ids": json.loads(finding.neuron_ids_json) if finding.neuron_ids_json else [],
+        "created_at": finding.created_at.isoformat() if finding.created_at else None,
+    }
+
+
+async def _finding_detail(db: AsyncSession, finding: IntegrityFinding) -> dict:
+    """Full finding with neuron content loaded."""
+    base = _finding_out(finding)
+    base["detail"] = json.loads(finding.detail_json) if finding.detail_json else {}
+    base["edge_ids"] = json.loads(finding.edge_ids_json) if finding.edge_ids_json else []
+
+    # Load neuron content for referenced neurons
+    neuron_ids = json.loads(finding.neuron_ids_json) if finding.neuron_ids_json else []
+    neurons = {}
+    for nid in neuron_ids[:10]:  # Cap to avoid excessive queries
+        neuron = await db.get(Neuron, nid)
+        if neuron:
+            neurons[nid] = {
+                "id": neuron.id, "label": neuron.label,
+                "department": neuron.department, "layer": neuron.layer,
+                "content": neuron.content, "summary": neuron.summary,
+                "source_type": neuron.source_type,
+                "source_origin": neuron.source_origin,
+                "invocations": neuron.invocations,
+            }
+    base["neurons"] = neurons
+    return base

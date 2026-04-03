@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 from app.config import settings
 from app.database import engine, async_session
 from app.models import Base, Neuron, Engram, SystemState, BatchJob, SourceDocument, NeuronSourceLink, ManagementReview, ComplianceSnapshot, EvidenceMapping, ObservationQueue
-from app.models_corvus import CorvusKnownApp, CorvusSession
+from app.models_corvus import CorvusKnownApp, CorvusSession, CorvusAdvisory  # noqa: F401 — for create_all
 from app.routers import query, neurons, admin, autopilot, performance, provenance, compliance, ingest, corvus, chat_sessions, engrams
 from app.compliance.router import router as compliance_suite_router
 from app.compliance.models import ComplianceSuiteRun, ComplianceProviderResult, ComplianceAttestation  # noqa: F401 — for create_all
@@ -657,6 +657,8 @@ app.include_router(engrams.router)
 app.include_router(compliance_suite_router)
 from app.routers import document_ingest
 app.include_router(document_ingest.router)
+from app.routers import integrity
+app.include_router(integrity.router)
 
 
 @app.get("/tenant")

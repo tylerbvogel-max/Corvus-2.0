@@ -46,6 +46,8 @@ class Neuron(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
+    # Updated on each neuron firing — for age-based integrity review
+    last_accessed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
 
     parent: Mapped["Neuron | None"] = relationship("Neuron", remote_side=[id], foreign_keys=[parent_id], lazy="selectin")
     firings: Mapped[list["NeuronFiring"]] = relationship("NeuronFiring", back_populates="neuron", lazy="select")
@@ -676,3 +678,54 @@ class EngramEdge(Base):
     source: Mapped[str] = mapped_column(String(20), default="bootstrap", server_default="bootstrap")
     last_updated_query: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     context: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# INTEGRITY — graph self-consistency monitoring and repair.
+# Inspired by neurological self-correcting processes: synaptic
+# homeostasis, pattern separation/completion, conflict monitoring,
+# and age-based reconsolidation review.
+# ═══════════════════════════════════════════════════════════════════
+
+
+class IntegrityScan(Base):
+    """A single integrity scan execution with its parameters and results."""
+    __tablename__ = "integrity_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    scope: Mapped[str] = mapped_column(String(100), nullable=False, server_default="global")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="running")
+    parameters_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    initiated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    findings: Mapped[list["IntegrityFinding"]] = relationship(
+        "IntegrityFinding", back_populates="scan", lazy="selectin",
+    )
+
+
+class IntegrityFinding(Base):
+    """Individual finding from an integrity scan, awaiting human review."""
+    __tablename__ = "integrity_findings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[int] = mapped_column(Integer, ForeignKey("integrity_scans.id"), nullable=False, index=True)
+    finding_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="warning")
+    priority_score: Mapped[float] = mapped_column(Float, default=0.0, server_default="0.0")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    neuron_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edge_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="open", index=True)
+    resolution: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    proposal_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("autopilot_proposals.id"), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    resolved_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    scan: Mapped["IntegrityScan"] = relationship("IntegrityScan", back_populates="findings")
