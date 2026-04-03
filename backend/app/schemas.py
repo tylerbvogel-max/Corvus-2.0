@@ -408,12 +408,22 @@ class AutopilotTickResponse(BaseModel):
 # ── Proposal schemas ──────────────────────────────────────────────────
 
 class GapEvidenceOut(BaseModel):
+    """Gap evidence from autopilot heuristic detection."""
     signal: str
     description: str
     metric_value: float
     threshold: float
     neuron_ids: list[int] = []
     query_ids: list[int] = []
+
+
+class DocumentEvidenceOut(BaseModel):
+    """Gap evidence from document ingestion."""
+    source: str
+    document: str
+    section: str
+    section_id: str
+    job_id: str
 
 
 class ProposalItemOut(BaseModel):
@@ -454,7 +464,7 @@ class ProposalDetailOut(BaseModel):
     state: str
     gap_source: str | None = None
     gap_description: str | None = None
-    gap_evidence: list[GapEvidenceOut] = []
+    gap_evidence: list[GapEvidenceOut | DocumentEvidenceOut | dict] = []
     priority_score: float = 0.0
     llm_reasoning: str | None = None
     llm_model: str | None = None

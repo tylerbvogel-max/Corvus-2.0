@@ -22,13 +22,14 @@ import EngramPage from './components/EngramPage'
 import CorvusPage from './components/CorvusPage'
 import ObservationReviewPage from './components/ObservationReviewPage'
 import ProposalQueuePage from './components/ProposalQueuePage'
+import DocumentIngestPage from './components/DocumentIngestPage'
 import GroupLandingPage from './components/GroupLandingPage'
 
 import { fetchTenantConfig, fetchAllTenants } from './config'
 import type { TenantConfig, TenantSummary } from './config'
 import { checkAccess, setAccessKey, getAccessKey } from './auth'
 
-type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'proposal-queue' | 'emergent-queue' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations' | 'query-landing' | 'autopilot-landing' | 'knowledge-landing' | 'evaluate-landing' | 'history-landing';
+type Tab = 'home' | 'explorer' | 'graph' | 'universe' | 'dashboard' | 'layer-heatmap' | 'query' | 'samples' | 'evaluation' | 'refinements' | 'autopilot' | 'proposal-queue' | 'emergent-queue' | 'document-ingest' | 'synaptic-learning' | 'quality' | 'fairness' | 'performance' | 'knowledge-governance' | 'engrams' | 'corvus-feed' | 'corvus-observations' | 'query-landing' | 'autopilot-landing' | 'knowledge-landing' | 'evaluate-landing' | 'history-landing';
 
 type Theme = 'corvus-native' | 'corvus-dark' | 'corvus-light' | 'high-contrast' | 'colorblind';
 
@@ -132,6 +133,7 @@ function buildNavGroups(tenantId: string | undefined): NavGroup[] {
         { key: 'autopilot', label: 'Autopilot', description: 'Automated gap detection and improvement cycles' },
         { key: 'proposal-queue', label: 'Proposal Queue', description: 'Review and approve autopilot proposals' },
         { key: 'emergent-queue', label: 'Emergent Queue', description: 'Unresolved patterns awaiting classification' },
+        { key: 'document-ingest', label: 'Document Ingest', description: 'Upload documents for bulk knowledge extraction' },
       ],
     },
     {
@@ -432,6 +434,7 @@ export default function App() {
         {tab === 'autopilot' && <AutopilotPage />}
         {tab === 'proposal-queue' && <ProposalQueuePage />}
         {tab === 'emergent-queue' && <EmergentQueuePage />}
+        {tab === 'document-ingest' && <DocumentIngestPage />}
         {tab === 'synaptic-learning' && <SynapticLearningPage />}
         {tab === 'quality' && <QualityPage />}
         {tab === 'fairness' && <FairnessPage />}

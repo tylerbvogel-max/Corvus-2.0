@@ -388,21 +388,37 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 
-function EvidenceCard({ evidence }: { evidence: GapEvidence }) {
+function EvidenceCard({ evidence }: { evidence: GapEvidence | Record<string, unknown> }) {
+  const isGapEvidence = 'signal' in evidence && 'metric_value' in evidence;
+  const isDocEvidence = 'source' in evidence && 'document' in evidence;
+
   return (
     <div style={{
       padding: '6px 10px', borderRadius: 6,
       background: 'var(--bg-input)', border: '1px solid var(--border)',
       fontSize: '0.78rem',
     }}>
-      <div style={{ fontWeight: 600, marginBottom: 2 }}>{evidence.signal}</div>
-      <div style={{ color: 'var(--text-dim)' }}>{evidence.description}</div>
-      <div style={{ display: 'flex', gap: 12, marginTop: 4, color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-        <span>Value: {evidence.metric_value.toFixed(2)}</span>
-        <span>Threshold: {evidence.threshold.toFixed(2)}</span>
-        {evidence.neuron_ids.length > 0 && <span>Neurons: {evidence.neuron_ids.join(', ')}</span>}
-        {evidence.query_ids.length > 0 && <span>Queries: {evidence.query_ids.join(', ')}</span>}
-      </div>
+      {isGapEvidence && (
+        <>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>{(evidence as GapEvidence).signal}</div>
+          <div style={{ color: 'var(--text-dim)' }}>{(evidence as GapEvidence).description}</div>
+          <div style={{ display: 'flex', gap: 12, marginTop: 4, color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+            <span>Value: {(evidence as GapEvidence).metric_value.toFixed(2)}</span>
+            <span>Threshold: {(evidence as GapEvidence).threshold.toFixed(2)}</span>
+            {(evidence as GapEvidence).neuron_ids.length > 0 && <span>Neurons: {(evidence as GapEvidence).neuron_ids.join(', ')}</span>}
+            {(evidence as GapEvidence).query_ids.length > 0 && <span>Queries: {(evidence as GapEvidence).query_ids.join(', ')}</span>}
+          </div>
+        </>
+      )}
+      {isDocEvidence && (
+        <>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Document: {String(evidence.document)}</div>
+          <div style={{ color: 'var(--text-dim)' }}>Section: {String(evidence.section)}</div>
+        </>
+      )}
+      {!isGapEvidence && !isDocEvidence && (
+        <div style={{ color: 'var(--text-dim)' }}>{JSON.stringify(evidence)}</div>
+      )}
     </div>
   );
 }

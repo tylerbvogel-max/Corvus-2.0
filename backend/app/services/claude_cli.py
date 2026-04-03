@@ -84,7 +84,9 @@ def _build_cli_command(system_prompt: str, model: str | None) -> list[str]:
     return cmd
 
 
-async def _run_cli_subprocess(cmd: list[str], prompt: str) -> tuple[bytes, bytes]:
+async def _run_cli_subprocess(
+    cmd: list[str], prompt: str, timeout: int = 180,
+) -> tuple[bytes, bytes]:
     # Must unset CLAUDECODE to avoid nesting guard
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
@@ -100,11 +102,11 @@ async def _run_cli_subprocess(cmd: list[str], prompt: str) -> tuple[bytes, bytes
     try:
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(input=prompt.encode()),
-            timeout=180,
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError("Claude CLI timed out after 180 seconds")
+        raise RuntimeError(f"Claude CLI timed out after {timeout} seconds")
 
     if proc.returncode != 0:
         err_msg = stderr.decode()[:500].strip()
@@ -151,17 +153,19 @@ async def claude_chat(
     user_message: str,
     max_tokens: int = 2048,
     model: str | None = None,
+    timeout: int = 180,
 ) -> dict:
     """Call the Claude CLI and return {"text": ..., "input_tokens": ..., "output_tokens": ...}.
 
     `model` should be a MODEL_REGISTRY key ("haiku", "sonnet", "opus") or None for default.
+    `timeout` is the subprocess timeout in seconds (default 180, use 300 for large extractions).
     """
     # JPL Rule 5: at least one of system_prompt or user_message must be non-empty
     assert (system_prompt and system_prompt.strip()) or (user_message and user_message.strip()), \
         "claude_chat requires a non-empty system_prompt or user_message"
 
     cmd = _build_cli_command(system_prompt, model)
-    stdout, _stderr = await _run_cli_subprocess(cmd, user_message)
+    stdout, _stderr = await _run_cli_subprocess(cmd, user_message, timeout=timeout)
     return _parse_cli_response(stdout, model)
 
 

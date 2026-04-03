@@ -17,7 +17,8 @@ from app.models import (
     NeuronSourceLink, EmergentQueue, Query,
 )
 from app.schemas import (
-    ProposalOut, ProposalDetailOut, ProposalItemOut, GapEvidenceOut,
+    ProposalOut, ProposalDetailOut, ProposalItemOut,
+    GapEvidenceOut, DocumentEvidenceOut,
     ProposalReviewRequest, ProposalApplyRequest, ProposalStatsOut,
 )
 
@@ -47,11 +48,17 @@ def _proposal_summary(p: AutopilotProposal) -> ProposalOut:
 
 def _proposal_detail(p: AutopilotProposal) -> ProposalDetailOut:
     """Convert proposal model to full detail schema."""
-    evidence: list[GapEvidenceOut] = []
+    evidence: list[GapEvidenceOut | DocumentEvidenceOut | dict] = []
     if p.gap_evidence_json:
         try:
             raw = json.loads(p.gap_evidence_json)
-            evidence = [GapEvidenceOut(**e) for e in raw]
+            for e in raw:
+                if "signal" in e:
+                    evidence.append(GapEvidenceOut(**e))
+                elif "source" in e and "document" in e:
+                    evidence.append(DocumentEvidenceOut(**e))
+                else:
+                    evidence.append(e)
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -209,7 +216,12 @@ async def _apply_create_item(
         content=spec.get("content", ""), summary=spec.get("summary", ""),
         department=spec.get("department"), role_key=spec.get("role_key"),
         is_active=True, created_at_query_count=total_queries,
-        source_origin="autopilot", proposal_item_id=item.id,
+        source_origin=spec.get("source_origin", "autopilot"),
+        source_type=spec.get("source_type", "operational"),
+        citation=spec.get("citation"),
+        source_url=spec.get("source_url"),
+        authority_level=spec.get("authority_level"),
+        proposal_item_id=item.id,
     )
     populate_external_references(neuron)
     db.add(neuron)

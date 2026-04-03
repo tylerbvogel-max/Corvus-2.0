@@ -1553,6 +1553,14 @@ export interface GapEvidence {
   query_ids: number[];
 }
 
+export interface DocumentEvidence {
+  source: string;
+  document: string;
+  section: string;
+  section_id: string;
+  job_id: string;
+}
+
 export interface ProposalItem {
   id: number;
   action: string;
@@ -1573,7 +1581,7 @@ export interface ProposalDetail {
   state: string;
   gap_source: string | null;
   gap_description: string | null;
-  gap_evidence: GapEvidence[];
+  gap_evidence: (GapEvidence | DocumentEvidence | Record<string, unknown>)[];
   priority_score: number;
   llm_reasoning: string | null;
   llm_model: string | null;
@@ -1629,4 +1637,105 @@ export function fetchProposalStats(): Promise<ProposalStats> {
 
 export function fetchNeuronProvenance(neuronId: number): Promise<Record<string, unknown>> {
   return json<Record<string, unknown>>(`/admin/neurons/${neuronId}/provenance`);
+}
+
+// ── Document Ingest ──
+
+export interface DocumentIngestJob {
+  id: string;
+  status: string;
+  step: string;
+  filename: string;
+  file_format: string;
+  file_size_bytes: number;
+  total_pages: number | null;
+  title: string;
+  source_type: string;
+  authority_level: string;
+  citation: string;
+  source_url: string | null;
+  department: string | null;
+  role_key: string | null;
+  total_sections: number;
+  current_section: number;
+  proposal_ids: number[];
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  model: string;
+  duplicates_flagged: number;
+  errors: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface DocumentStructure {
+  title: string;
+  total_pages: number | null;
+  sections: Array<{
+    id: string;
+    title: string;
+    level: number;
+    char_start: number;
+    char_end: number;
+    page_start: number | null;
+    page_end: number | null;
+    parent_section_id: string | null;
+  }>;
+}
+
+export async function uploadDocument(
+  file: File,
+  metadata: {
+    title?: string;
+    source_type?: string;
+    authority_level?: string;
+    citation?: string;
+    source_url?: string;
+    department?: string;
+    role_key?: string;
+    model?: string;
+  },
+): Promise<DocumentIngestJob> {
+  const { getAuthHeaders } = await import('./auth');
+  const authHeaders = getAuthHeaders();
+
+  const form = new FormData();
+  form.append('file', file);
+  if (metadata.title) form.append('title', metadata.title);
+  if (metadata.source_type) form.append('source_type', metadata.source_type);
+  if (metadata.authority_level) form.append('authority_level', metadata.authority_level);
+  if (metadata.citation) form.append('citation', metadata.citation);
+  if (metadata.source_url) form.append('source_url', metadata.source_url);
+  if (metadata.department) form.append('department', metadata.department);
+  if (metadata.role_key) form.append('role_key', metadata.role_key);
+  if (metadata.model) form.append('model', metadata.model);
+
+  const res = await fetch('/admin/documents/upload', {
+    method: 'POST',
+    headers: authHeaders,
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export function fetchDocumentJobs(status?: string): Promise<DocumentIngestJob[]> {
+  const params = status ? `?status=${status}` : '';
+  return json<DocumentIngestJob[]>(`/admin/documents/${params}`);
+}
+
+export function fetchDocumentJobStatus(jobId: string): Promise<DocumentIngestJob> {
+  return json<DocumentIngestJob>(`/admin/documents/${jobId}`);
+}
+
+export function fetchDocumentStructure(jobId: string): Promise<DocumentStructure> {
+  return json<DocumentStructure>(`/admin/documents/${jobId}/structure`);
+}
+
+export function cancelDocumentJob(jobId: string): Promise<DocumentIngestJob> {
+  return json<DocumentIngestJob>(`/admin/documents/${jobId}/cancel`, { method: 'POST' });
 }

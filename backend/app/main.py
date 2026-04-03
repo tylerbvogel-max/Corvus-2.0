@@ -655,6 +655,8 @@ app.include_router(corvus.router)
 app.include_router(chat_sessions.router)
 app.include_router(engrams.router)
 app.include_router(compliance_suite_router)
+from app.routers import document_ingest
+app.include_router(document_ingest.router)
 
 
 @app.get("/tenant")
