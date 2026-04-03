@@ -13,6 +13,7 @@ import {
 } from '../api';
 
 type StateFilter = 'all' | 'proposed' | 'approved' | 'rejected' | 'applied';
+type SourceFilter = 'all' | 'directive' | 'document_ingest' | 'integrity';
 
 const STATE_COLORS: Record<string, string> = {
   proposed: '#e8a838',
@@ -20,6 +21,13 @@ const STATE_COLORS: Record<string, string> = {
   rejected: '#e74c3c',
   applied: '#2196f3',
 };
+
+const SOURCE_OPTIONS: { key: SourceFilter; label: string }[] = [
+  { key: 'all', label: 'All Sources' },
+  { key: 'directive', label: 'Autopilot' },
+  { key: 'document_ingest', label: 'Document Ingest' },
+  { key: 'integrity', label: 'Integrity' },
+];
 
 const selectStyle: React.CSSProperties = {
   background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)',
@@ -35,6 +43,7 @@ export default function ProposalQueuePage() {
   const [stats, setStats] = useState<ProposalStats | null>(null);
   const [selected, setSelected] = useState<ProposalDetail | null>(null);
   const [filter, setFilter] = useState<StateFilter>('all');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reviewer, setReviewer] = useState('');
@@ -46,18 +55,24 @@ export default function ProposalQueuePage() {
     setLoading(true);
     setError(null);
     try {
+      // For exact-match sources, pass to backend; for "integrity" group, filter client-side
+      const apiSource = sourceFilter === 'directive' || sourceFilter === 'document_ingest'
+        ? sourceFilter : undefined;
       const [p, s] = await Promise.all([
-        fetchProposals(filter === 'all' ? undefined : filter),
+        fetchProposals(filter === 'all' ? undefined : filter, apiSource),
         fetchProposalStats(),
       ]);
-      setProposals(p);
+      const filtered = sourceFilter === 'integrity'
+        ? p.filter(x => x.gap_source?.startsWith('integrity_'))
+        : sourceFilter === 'all' ? p : p;
+      setProposals(filtered);
       setStats(s);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, sourceFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -146,7 +161,29 @@ export default function ProposalQueuePage() {
               </div>
             )}
 
-            {/* Filter */}
+            {/* Source pills */}
+            <div style={{
+              display: 'flex', borderRadius: 8, overflow: 'hidden',
+              border: '1px solid var(--border)', background: 'var(--bg-input)',
+            }}>
+              {SOURCE_OPTIONS.map(opt => (
+                <button
+                  key={opt.key}
+                  onClick={() => setSourceFilter(opt.key)}
+                  style={{
+                    flex: 1, padding: '5px 4px', border: 'none', cursor: 'pointer',
+                    fontSize: '0.68rem', fontWeight: 600,
+                    background: sourceFilter === opt.key ? 'var(--accent)' : 'transparent',
+                    color: sourceFilter === opt.key ? '#fff' : 'var(--text-dim)',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* State filter */}
             <select value={filter} onChange={e => setFilter(e.target.value as StateFilter)} style={selectStyle}>
               <option value="all">All States</option>
               <option value="proposed">Proposed</option>

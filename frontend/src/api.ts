@@ -1615,9 +1615,12 @@ export interface ProposalStats {
   total: number;
 }
 
-export function fetchProposals(state?: string): Promise<ProposalSummary[]> {
-  const params = state ? `?state=${state}` : '';
-  return json<ProposalSummary[]>(`/admin/proposals/${params}`);
+export function fetchProposals(state?: string, gapSource?: string): Promise<ProposalSummary[]> {
+  const parts: string[] = [];
+  if (state) parts.push(`state=${state}`);
+  if (gapSource) parts.push(`gap_source=${gapSource}`);
+  const qs = parts.length ? `?${parts.join('&')}` : '';
+  return json<ProposalSummary[]>(`/admin/proposals/${qs}`);
 }
 
 export function fetchProposalDetail(id: number): Promise<ProposalDetail> {
