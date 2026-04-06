@@ -1,12 +1,16 @@
 """Multi-provider LLM abstraction layer.
 
 Unified interface for calling LLMs across providers: Anthropic, Google Gemini,
-and Groq. All callers use display names from MODEL_REGISTRY.
+Groq, and Azure OpenAI. All callers use display names from MODEL_REGISTRY.
 Provider dispatch is automatic based on the model's registered provider.
+
+Model aliases (LLM_MODEL_ALIASES env var) allow environment-specific redirection
+without changing call sites — e.g. {"haiku":"azure-gpt4o-mini"} in GovCloud.
 
 Free-tier models are prioritized in the registry ordering for UI display.
 """
 
+import json
 import logging
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -21,7 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ModelInfo:
     display_name: str       # Short name used throughout the codebase
-    provider: str           # "anthropic" | "google" | "groq"
+    provider: str           # "anthropic" | "google" | "groq" | "azure_openai"
     api_id: str             # Provider-specific model ID
     input_price: float      # USD per million input tokens
     output_price: float     # USD per million output tokens
@@ -103,6 +107,31 @@ MODEL_REGISTRY: MappingProxyType[str, ModelInfo] = MappingProxyType({
         output_price=0.0,
         tier="free",
     ),
+    # ── Azure OpenAI (GovCloud / enterprise deployments) ──
+    "azure-gpt4o": ModelInfo(
+        display_name="azure-gpt4o",
+        provider="azure_openai",
+        api_id="gpt-4o",
+        input_price=2.50,
+        output_price=10.00,
+        tier="frontier",
+    ),
+    "azure-gpt4o-mini": ModelInfo(
+        display_name="azure-gpt4o-mini",
+        provider="azure_openai",
+        api_id="gpt-4o-mini",
+        input_price=0.15,
+        output_price=0.60,
+        tier="frontier",
+    ),
+    "azure-o1": ModelInfo(
+        display_name="azure-o1",
+        provider="azure_openai",
+        api_id="o1",
+        input_price=15.00,
+        output_price=60.00,
+        tier="frontier",
+    ),
 })
 
 # No default — user must always select a model explicitly
@@ -118,6 +147,7 @@ def _provider_available(provider: str) -> bool:
         "anthropic": settings.anthropic_api_key,
         "google": settings.google_api_key,
         "groq": settings.groq_api_key,
+        "azure_openai": settings.azure_openai_api_key,
     })
     key = key_map.get(provider, "")
     assert provider in key_map, f"Unknown provider: {provider}"
@@ -272,12 +302,120 @@ async def _groq_chat(
     }
 
 
+def _azure_deployment_name(api_id: str) -> str:
+    """Map model api_id to Azure OpenAI deployment name from settings."""
+    deploy_map = MappingProxyType({
+        "gpt-4o": settings.azure_openai_deployment_gpt4o,
+        "gpt-4o-mini": settings.azure_openai_deployment_gpt4o_mini,
+        "o1": settings.azure_openai_deployment_o1,
+    })
+    deployment = deploy_map.get(api_id, "")
+    assert deployment, (
+        f"No Azure deployment configured for model {api_id!r}. "
+        f"Set AZURE_OPENAI_DEPLOYMENT_* in .env."
+    )
+    return deployment
+
+
+def _build_azure_messages(
+    system_prompt: str, user_message: str, is_o1: bool,
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    """Build messages list and token-limit key for Azure OpenAI.
+
+    o1 models do not support system messages and use max_completion_tokens.
+    """
+    messages: list[dict[str, str]] = []
+    if is_o1:
+        if system_prompt:
+            messages.append({"role": "user", "content": system_prompt})
+        messages.append({"role": "user", "content": user_message})
+        token_key = "max_completion_tokens"
+    else:
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_message})
+        token_key = "max_tokens"
+    assert len(messages) >= 1, "messages must contain at least one entry"
+    return messages, token_key
+
+
+async def _azure_openai_chat(
+    system_prompt: str, user_message: str, max_tokens: int,
+    model_info: ModelInfo, timeout: int = 180,
+) -> dict:
+    """Call Azure OpenAI API via the openai SDK."""
+    from openai import AsyncAzureOpenAI
+
+    assert settings.azure_openai_api_key, "AZURE_OPENAI_API_KEY not configured"
+    assert settings.azure_openai_endpoint, "AZURE_OPENAI_ENDPOINT not configured"
+    assert len(user_message.strip()) > 0, "user_message must be non-empty"
+
+    deployment = _azure_deployment_name(model_info.api_id)
+    messages, token_key = _build_azure_messages(
+        system_prompt, user_message, model_info.api_id.startswith("o1"),
+    )
+
+    client = AsyncAzureOpenAI(
+        api_key=settings.azure_openai_api_key,
+        azure_endpoint=settings.azure_openai_endpoint,
+        api_version=settings.azure_openai_api_version,
+        timeout=float(timeout),
+    )
+    try:
+        response = await client.chat.completions.create(
+            model=deployment, messages=messages, **{token_key: max_tokens},
+        )
+    finally:
+        await client.close()
+
+    text = response.choices[0].message.content if response.choices else ""
+    usage = response.usage
+    input_tokens = usage.prompt_tokens if usage else 0
+    output_tokens = usage.completion_tokens if usage else 0
+    cost = estimate_cost(model_info.display_name, input_tokens, output_tokens)
+
+    assert input_tokens >= 0, f"input_tokens must be non-negative, got {input_tokens}"
+    assert output_tokens >= 0, f"output_tokens must be non-negative, got {output_tokens}"
+    return {
+        "text": text or "",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": cost,
+        "model_version": response.model if response.model else model_info.api_id,
+    }
+
+
+# ── Model alias resolution ──
+
+def _resolve_alias(model: str) -> str:
+    """Resolve model alias from LLM_MODEL_ALIASES env var.
+
+    If aliases are configured and the model name matches, returns the target.
+    Otherwise returns the original model name unchanged.
+    """
+    assert isinstance(model, str), "model must be a string"
+    alias_json = settings.llm_model_aliases
+    if not alias_json or not alias_json.strip():
+        return model
+    try:
+        aliases = json.loads(alias_json)
+    except json.JSONDecodeError:
+        logger.warning("LLM_MODEL_ALIASES is not valid JSON, ignoring: %s", alias_json)
+        return model
+    assert isinstance(aliases, dict), "LLM_MODEL_ALIASES must be a JSON object"
+    resolved = aliases.get(model, model)
+    if resolved != model:
+        logger.debug("Model alias: %s -> %s", model, resolved)
+    return resolved
+
+
 # ── Provider dispatch ──
 
 _PROVIDER_DISPATCH = MappingProxyType({
     "anthropic": _anthropic_chat,
     "google": _google_chat,
     "groq": _groq_chat,
+    "azure_openai": _azure_openai_chat,
 })
 
 
@@ -286,30 +424,43 @@ async def llm_chat(
     user_message: str,
     max_tokens: int = 2048,
     model: str | None = None,
+    timeout: int = 180,
 ) -> dict:
     """Call an LLM and return {"text", "input_tokens", "output_tokens", "cost_usd", "model_version"}.
 
-    `model` must be a MODEL_REGISTRY key (e.g. "haiku", "gemini-flash", "groq-llama-70b").
+    `model` must be a MODEL_REGISTRY key (e.g. "haiku", "gemini-flash", "azure-gpt4o").
+    Model aliases from LLM_MODEL_ALIASES are resolved before lookup.
     No default model — caller must specify explicitly.
     """
     assert model is not None, "model must be specified — no default model selection"
     assert (system_prompt and system_prompt.strip()) or (user_message and user_message.strip()), \
         "llm_chat requires a non-empty system_prompt or user_message"
 
-    model_info = MODEL_REGISTRY.get(model)
+    resolved = _resolve_alias(model)
+    model_info = MODEL_REGISTRY.get(resolved)
     if not model_info:
-        raise ValueError(f"Unknown model: {model!r}. Available: {list(MODEL_REGISTRY.keys())}")
+        raise ValueError(
+            f"Unknown model: {resolved!r}"
+            f"{' (aliased from ' + model + ')' if resolved != model else ''}. "
+            f"Available: {list(MODEL_REGISTRY.keys())}"
+        )
 
     if not _provider_available(model_info.provider):
         raise ValueError(
             f"Provider {model_info.provider!r} not configured. "
-            f"Set the API key in .env to use model {model!r}."
+            f"Set the API key in .env to use model {resolved!r}."
         )
 
     handler = _PROVIDER_DISPATCH.get(model_info.provider)
     assert handler is not None, f"No handler for provider: {model_info.provider}"
 
-    result = await handler(system_prompt, user_message, max_tokens, model_info)
+    # Azure OpenAI handler accepts timeout; others ignore it for now
+    if model_info.provider == "azure_openai":
+        result = await handler(
+            system_prompt, user_message, max_tokens, model_info, timeout,
+        )
+    else:
+        result = await handler(system_prompt, user_message, max_tokens, model_info)
 
     assert "text" in result and "input_tokens" in result and "output_tokens" in result, \
         "llm_chat result missing required keys"

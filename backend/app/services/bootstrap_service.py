@@ -260,7 +260,8 @@ async def _pass4_gap_fill(db, neurons, by_dept, edges_to_create, _add_edge) -> i
 
 
 async def _write_edges(db, edges_to_create):
-    """Write planned edges to database with upsert."""
+    """Write planned edges to database with upsert (always promoted: w >= 0.30)."""
+    from app.services.edge_tier import delete_weak_edge
     for (src, tgt), info in edges_to_create.items():
         w = round(info["weight"], 4)
         co_fire = max(1, round(w * 10))
@@ -278,6 +279,8 @@ async def _write_edges(db, edges_to_create):
             "  last_adjusted = now() "
             "WHERE neuron_edges.source != 'organic'"
         ), {"src": src, "tgt": tgt, "cfc": co_fire, "w": w})
+        # Remove from JSONB if previously stored as weak edge
+        await delete_weak_edge(db, src, tgt)
 
 
 async def _estimate_invocations(db, neurons, by_parent) -> int:
@@ -351,11 +354,22 @@ async def purge_bootstrap(db: AsyncSession) -> dict:
 
     Use this if bootstrap priors are causing unwanted bias.
     """
-    # Delete bootstrap edges
+    # Delete bootstrap edges from promoted table
     result = await db.execute(text(
         "DELETE FROM neuron_edges WHERE source = 'bootstrap'"
     ))
     edges_deleted = result.rowcount
+
+    # Remove bootstrap entries from JSONB weak_edges
+    await db.execute(text("""
+        UPDATE neurons
+        SET weak_edges = (
+            SELECT jsonb_object_agg(key, value)
+            FROM jsonb_each(weak_edges)
+            WHERE value->>'s' != 'bootstrap'
+        )
+        WHERE weak_edges IS NOT NULL
+    """))
 
     # Reset invocations on neurons that have no organic firings
     inv_result = await db.execute(text("""
@@ -444,6 +458,8 @@ def _find_cross_role_edges(
 
 
 async def _write_bridge_edges(db: AsyncSession, edges: list[dict]) -> int:
+    """Write bridge edges (always promoted: w >= 0.20)."""
+    from app.services.edge_tier import delete_weak_edge
     created = 0
     for edge in edges:
         co_fire = max(1, round(edge["weight"] * 10))
@@ -459,6 +475,8 @@ async def _write_bridge_edges(db: AsyncSession, edges: list[dict]) -> int:
         ), {"src": edge["src"], "tgt": edge["tgt"], "cfc": co_fire, "w": edge["weight"]})
         if r.rowcount > 0:
             created += 1
+        # Remove from JSONB if previously stored as weak edge
+        await delete_weak_edge(db, edge["src"], edge["tgt"])
     return created
 
 

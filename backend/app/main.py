@@ -659,6 +659,10 @@ from app.routers import document_ingest
 app.include_router(document_ingest.router)
 from app.routers import integrity
 app.include_router(integrity.router)
+from app.routers import tool_definitions
+app.include_router(tool_definitions.router)
+from app.routers import fluent
+app.include_router(fluent.router)
 
 
 @app.get("/tenant")

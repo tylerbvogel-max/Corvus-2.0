@@ -305,7 +305,14 @@ async def graph_stats() -> str:
             .order_by(func.count(Neuron.id).desc())
         )
 
-        edge_count = (await db.execute(select(func.count()).select_from(NeuronEdge))).scalar() or 0
+        promoted_count = (await db.execute(select(func.count()).select_from(NeuronEdge))).scalar() or 0
+        from sqlalchemy import text as sa_text
+        weak_count = (await db.execute(sa_text(
+            "SELECT COALESCE(SUM(jsonb_array_length("
+            "  COALESCE((SELECT jsonb_agg(k) FROM jsonb_object_keys(weak_edges) k), '[]'::jsonb)"
+            ")), 0) FROM neurons WHERE weak_edges IS NOT NULL"
+        ))).scalar() or 0
+        edge_count = promoted_count + weak_count
 
         state = (await db.execute(select(SystemState).where(SystemState.id == 1))).scalar_one_or_none()
 

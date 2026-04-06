@@ -82,11 +82,11 @@ async def _classify_batch(
     pairs: list[SimilarPair],
     content_map: dict[int, tuple[str, str]],
 ) -> list[dict]:
-    """Call Claude CLI to classify a batch of pairs."""
-    from app.services.claude_cli import claude_chat
+    """Call LLM to classify a batch of pairs."""
+    from app.services.llm_provider import llm_chat
 
     user_prompt = _format_pair_prompt(pairs, content_map)
-    result = await claude_chat(
+    result = await llm_chat(
         system_prompt=_CLASSIFY_SYSTEM_PROMPT,
         user_message=user_prompt,
         model="haiku",

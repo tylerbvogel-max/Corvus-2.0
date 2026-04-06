@@ -139,14 +139,22 @@ async def _handle_graph_stats(db: AsyncSession, match: re.Match):
     )
     dept_rows = by_dept.all()
 
-    edge_count = (await db.execute(select(func.count()).select_from(NeuronEdge))).scalar() or 0
+    promoted_count = (await db.execute(select(func.count()).select_from(NeuronEdge))).scalar() or 0
+    from sqlalchemy import text
+    weak_count_result = await db.execute(text(
+        "SELECT COALESCE(SUM(jsonb_array_length("
+        "  COALESCE((SELECT jsonb_agg(k) FROM jsonb_object_keys(weak_edges) k), '[]'::jsonb)"
+        ")), 0) FROM neurons WHERE weak_edges IS NOT NULL"
+    ))
+    weak_count = weak_count_result.scalar() or 0
+    edge_count = promoted_count + weak_count
 
     state = (await db.execute(select(SystemState).where(SystemState.id == 1))).scalar_one_or_none()
     total_queries = state.total_queries if state else 0
 
     lines = ["## Neuron Graph Statistics\n"]
     lines.append(f"- **Total active neurons**: {total}")
-    lines.append(f"- **Total co-firing edges**: {edge_count}")
+    lines.append(f"- **Total co-firing edges**: {edge_count} ({promoted_count} promoted, {weak_count} weak)")
     lines.append(f"- **Total queries executed**: {total_queries}")
     lines.append(f"\n### By Layer")
     for layer, count in layer_rows:

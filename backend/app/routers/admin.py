@@ -45,12 +45,13 @@ async def reset_firings(db: AsyncSession = Depends(get_db)):
         state.global_token_counter = 0
         state.total_queries = 0
 
-    # Reset neuron invocations and utility
+    # Reset neuron invocations, utility, and weak edges
     neurons = await db.execute(select(Neuron))
     for neuron in neurons.scalars():
         neuron.invocations = 0
         neuron.avg_utility = 0.5
         neuron.is_active = True
+        neuron.weak_edges = None
 
     await db.commit()
 
@@ -566,7 +567,7 @@ async def ingest_source(
       - role_key: str | None (target role)
       - queue_entry_id: int | None (if resolving an emergent queue entry)
     """
-    from app.services.claude_cli import claude_chat as llm_chat
+    from app.services.llm_provider import llm_chat
 
     source_text, citation, source_type, department, role_key, queue_entry_id = _validate_ingest_body(body)
     parent_neuron = await _find_parent_neuron(db, role_key, department)
@@ -907,7 +908,7 @@ def _enrich_batch_proposals(proposals: list[dict], state: dict) -> None:
 
 async def _run_batch_ingest(job_id: str, start_chunk: int = 0):
     """Background task: process chunks sequentially through the chosen model."""
-    from app.services.claude_cli import claude_chat as llm_chat
+    from app.services.llm_provider import llm_chat
 
     state = await _load_batch_job_state(job_id)
     if not state:
@@ -1127,6 +1128,18 @@ async def prune_edges(db: AsyncSession = Depends(get_db)):
         "DELETE FROM neuron_edges "
         "WHERE co_fire_count < :min_cofires AND last_updated_query < :stale"
     ), {"min_cofires": settings.edge_prune_min_cofires, "stale": max(0, stale_threshold)})
+
+    # Also prune stale weak edges from JSONB
+    min_c = settings.edge_prune_min_cofires
+    await db.execute(text("""
+        UPDATE neurons
+        SET weak_edges = (
+            SELECT jsonb_object_agg(key, value)
+            FROM jsonb_each(weak_edges)
+            WHERE (value->>'c')::int >= :min_c
+        )
+        WHERE weak_edges IS NOT NULL
+    """), {"min_c": min_c})
 
     await db.commit()
 

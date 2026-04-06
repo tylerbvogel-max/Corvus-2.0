@@ -1,5 +1,6 @@
 import datetime
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -48,6 +49,10 @@ class Neuron(Base):
     )
     # Updated on each neuron firing — for age-based integrity review
     last_accessed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Tiered edges: weak edges (below promotion threshold) stored as JSONB
+    # Format: {"<peer_id>": {"w": 0.05, "t": "pyramidal", "c": 1, "s": "organic", "q": 42}}
+    # Bidirectional: edge(A,B) stored on min(A,B) keyed by str(max(A,B))
+    weak_edges: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     parent: Mapped["Neuron | None"] = relationship("Neuron", remote_side=[id], foreign_keys=[parent_id], lazy="selectin")
     firings: Mapped[list["NeuronFiring"]] = relationship("NeuronFiring", back_populates="neuron", lazy="select")

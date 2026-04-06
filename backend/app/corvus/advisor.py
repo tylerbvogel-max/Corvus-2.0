@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from app.corvus.ocr import text_similarity
 from app.database import async_session
 from app.models_corvus import CorvusAdvisory
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat
 from app.services.executor import prepare_context
 
 import app.corvus.capture as capture_mod
@@ -147,7 +147,7 @@ async def _format_advisory(
         f"Relevant knowledge:\n{neuron_summaries}"
     )
 
-    resp = await claude_chat(system, user_msg, max_tokens=200, model="haiku", timeout=30)
+    resp = await llm_chat(system, user_msg, max_tokens=200, model="haiku", timeout=30)
     return {"text": resp["text"], "cost_usd": resp["cost_usd"]}
 
 

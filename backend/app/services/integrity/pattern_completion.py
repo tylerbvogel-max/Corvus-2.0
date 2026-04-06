@@ -24,7 +24,10 @@ from app.services.integrity.similarity import (
 
 
 async def _load_existing_edges(db: AsyncSession) -> set[tuple[int, int]]:
-    """Load all existing edge pairs as a set for O(1) lookup."""
+    """Load all existing edge pairs (promoted + weak JSONB) as a set for O(1) lookup."""
+    from sqlalchemy import text
+
+    # Promoted edges from table
     result = await db.execute(
         select(NeuronEdge.source_id, NeuronEdge.target_id)
     )
@@ -32,6 +35,17 @@ async def _load_existing_edges(db: AsyncSession) -> set[tuple[int, int]]:
     for row in result.all():
         edges.add((row[0], row[1]))
         edges.add((row[1], row[0]))  # Bidirectional lookup
+
+    # Weak edges from JSONB column
+    weak_result = await db.execute(text(
+        "SELECT n.id, key::int "
+        "FROM neurons n, jsonb_each(n.weak_edges) "
+        "WHERE n.weak_edges IS NOT NULL"
+    ))
+    for holder_id, peer_id in weak_result.all():
+        edges.add((holder_id, peer_id))
+        edges.add((peer_id, holder_id))
+
     assert isinstance(edges, set), "Must return a set"
     return edges
 

@@ -14,6 +14,20 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     google_api_key: str = ""
     groq_api_key: str = ""
+    # Azure OpenAI (GovCloud deployment)
+    azure_openai_api_key: str = ""
+    azure_openai_endpoint: str = ""  # e.g. https://<resource>.openai.azure.com/
+    azure_openai_api_version: str = "2024-10-21"
+    azure_openai_deployment_gpt4o: str = ""
+    azure_openai_deployment_gpt4o_mini: str = ""
+    azure_openai_deployment_o1: str = ""
+    # Model alias map (JSON): e.g. {"haiku":"azure-gpt4o-mini","sonnet":"azure-gpt4o"}
+    llm_model_aliases: str = ""
+    # RBAC (disabled by default for backward compat)
+    rbac_mode: str = "disabled"  # "disabled" | "header" | "azure_ad"
+    rbac_azure_tenant_id: str = ""
+    rbac_admin_claim: str = "corvus-admin"
+    rbac_reviewer_claim: str = "corvus-reviewer"
     port: int = 8002
     tenant_id: str = "corvus-aero"
     cors_origins: str = ""  # Comma-separated; empty = auto from port
@@ -55,6 +69,8 @@ class Settings(BaseSettings):
     # Candidate selection limits
     candidate_limit: int = 500
     # Co-firing edge management
+    edge_promote_min_weight: float = 0.10
+    edge_promote_min_cofires: int = 2
     min_cofire_score: float = 0.3
     edge_prune_min_cofires: int = 2
     edge_prune_stale_queries: int = 100

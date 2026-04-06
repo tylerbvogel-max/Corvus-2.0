@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Neuron, NeuronEdge, NeuronRefinement, ObservationQueue
-from app.services.claude_cli import claude_chat as llm_chat
+from app.services.llm_provider import llm_chat
 from app.schemas import ObservationEvalRequest, ObservationBatchEvalRequest, ObservationApplyRequest
 from app.services.reference_hooks import populate_external_references
 
@@ -899,21 +899,36 @@ async def _strengthen_entity_edges(
     if len(neuron_ids) < 2:
         return 0
 
-    # Strengthen edges between all pairs
+    # Strengthen edges between all pairs (tiered: promoted table or JSONB)
+    from app.services.edge_tier import (
+        get_weak_edge, upsert_weak_edge, maybe_promote,
+    )
+    from sqlalchemy import text as sql_text
     id_list = sorted(neuron_ids)
     strengthened = 0
     for i, src in enumerate(id_list):
         for tgt in id_list[i + 1:]:
-            from sqlalchemy import text as sql_text
-            await db.execute(sql_text(
-                "INSERT INTO neuron_edges (source_id, target_id, co_fire_count, weight, source, last_adjusted) "
-                "VALUES (:src, :tgt, 1, 0.05, 'corvus', now()) "
-                "ON CONFLICT (source_id, target_id) DO UPDATE SET "
-                "co_fire_count = neuron_edges.co_fire_count + 1, "
-                "weight = LEAST(1.0, (neuron_edges.co_fire_count + 1) / 20.0), "
-                "source = CASE WHEN neuron_edges.source = 'bootstrap' THEN 'corvus' ELSE neuron_edges.source END, "
-                "last_adjusted = now()"
+            # Try UPDATE in promoted table first
+            result = await db.execute(sql_text(
+                "UPDATE neuron_edges "
+                "SET co_fire_count = co_fire_count + 1, "
+                "    weight = LEAST(1.0, (co_fire_count + 1) / 20.0), "
+                "    source = CASE WHEN source = 'bootstrap' THEN 'corvus' ELSE source END, "
+                "    last_adjusted = now() "
+                "WHERE source_id = :src AND target_id = :tgt "
+                "RETURNING weight, co_fire_count"
             ), {"src": src, "tgt": tgt})
+            row = result.one_or_none()
+            if row:
+                strengthened += 1
+                continue
+            # Not in table — handle in JSONB
+            entry = await get_weak_edge(db, src, tgt)
+            new_c = (entry.get("c", 0) + 1) if entry else 1
+            new_w = min(1.0, (new_c + 1) / 20.0)
+            data = {"w": new_w, "t": "pyramidal", "c": new_c, "s": "corvus", "q": 0}
+            await upsert_weak_edge(db, src, tgt, data)
+            await maybe_promote(db, src, tgt, new_w, new_c)
             strengthened += 1
 
     return strengthened

@@ -25,7 +25,7 @@ from app.schemas import (
     AutopilotConfigOut, AutopilotConfigUpdate, AutopilotRunOut, AutopilotTickResponse,
 )
 from app.services.executor import execute_query
-from app.services.claude_cli import claude_chat as llm_chat
+from app.services.llm_provider import llm_chat
 from app.services.neuron_service import get_system_state
 from app.services.gap_detector import detect_gap, detect_gaps_scored, GapTarget, ScoredGap
 

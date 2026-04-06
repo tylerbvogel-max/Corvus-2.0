@@ -43,7 +43,11 @@ def _compute_distribution(weights: np.ndarray) -> dict:
 async def _load_edges_for_scope(
     db: AsyncSession, scope: str,
 ) -> list[tuple[int, int, float]]:
-    """Load (source_id, target_id, weight) tuples matching scope."""
+    """Load (source_id, target_id, weight) tuples matching scope.
+
+    Note: Only covers promoted edges (neuron_edges table). Weak edges in JSONB
+    are below the promotion threshold and are not candidates for rescaling.
+    """
     stmt = select(NeuronEdge.source_id, NeuronEdge.target_id, NeuronEdge.weight)
 
     if scope.startswith("department:"):

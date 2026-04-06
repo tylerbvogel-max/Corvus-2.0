@@ -246,7 +246,7 @@ async def _apply_create_item(
 async def _apply_rescale_item(
     db: AsyncSession, item: ProposalItem,
 ) -> None:
-    """Apply a single edge weight rescale item."""
+    """Apply a single edge weight rescale item (with tier demotion check)."""
     assert item.neuron_spec_json is not None, "rescale item must have spec"
     spec = json.loads(item.neuron_spec_json)
     source_id = spec["source_id"]
@@ -257,25 +257,37 @@ async def _apply_rescale_item(
     if edge:
         edge.weight = new_weight
         edge.last_adjusted = datetime.utcnow()
+        # Demote if rescale pushed weight below threshold
+        from app.services.edge_tier import maybe_demote
+        await maybe_demote(db, source_id, target_id, new_weight, edge.co_fire_count)
 
 
 async def _apply_link_item(
     db: AsyncSession, item: ProposalItem,
 ) -> None:
-    """Apply a new edge creation (pattern completion)."""
+    """Apply a new edge creation (pattern completion) — tiered storage."""
     assert item.neuron_spec_json is not None, "link item must have spec"
     spec = json.loads(item.neuron_spec_json)
 
-    edge = NeuronEdge(
-        source_id=spec["source_id"],
-        target_id=spec["target_id"],
-        weight=spec.get("initial_weight", 0.15),
-        co_fire_count=1,
-        edge_type=spec.get("edge_type", "pyramidal"),
-        source=spec.get("source", "integrity_completion"),
-        context=spec.get("context", ""),
-    )
-    db.add(edge)
+    weight = spec.get("initial_weight", 0.15)
+    cofires = 1
+    src = spec["source_id"]
+    tgt = spec["target_id"]
+    etype = spec.get("edge_type", "pyramidal")
+    source = spec.get("source", "integrity_completion")
+
+    from app.services.edge_tier import is_promoted, upsert_weak_edge, delete_weak_edge
+    if is_promoted(weight, cofires):
+        edge = NeuronEdge(
+            source_id=src, target_id=tgt, weight=weight,
+            co_fire_count=cofires, edge_type=etype,
+            source=source, context=spec.get("context", ""),
+        )
+        db.add(edge)
+        await delete_weak_edge(db, src, tgt)
+    else:
+        data = {"w": weight, "t": etype, "c": cofires, "s": source, "q": 0}
+        await upsert_weak_edge(db, src, tgt, data)
 
 
 async def _apply_merge_item(

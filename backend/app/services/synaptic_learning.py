@@ -126,6 +126,9 @@ async def _apply_edge_learning(
         for b in neuron_ids[i + 1:]
     ]
 
+    from app.services.edge_tier import (
+        get_weak_edge, upsert_weak_edge, maybe_promote,
+    )
     updated = 0
     for src, tgt in pairs:
         result = await db.execute(text(
@@ -136,7 +139,19 @@ async def _apply_edge_learning(
             "    last_adjusted = now() "
             "WHERE source_id = :src AND target_id = :tgt"
         ), {"inc": increment, "qoff": query_offset, "src": src, "tgt": tgt})
-        updated += result.rowcount
+        if result.rowcount > 0:
+            updated += 1
+            continue
+        # Not in promoted table — update in JSONB
+        entry = await get_weak_edge(db, src, tgt)
+        if entry is None:
+            continue
+        new_c = entry.get("c", 0) + increment
+        new_w = min(1.0, (new_c + 1) / 20.0)
+        data = {**entry, "w": new_w, "c": new_c, "q": query_offset}
+        await upsert_weak_edge(db, src, tgt, data)
+        await maybe_promote(db, src, tgt, new_w, new_c)
+        updated += 1
 
     assert updated >= 0, "updated count must be non-negative"
     return updated

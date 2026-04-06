@@ -19,7 +19,7 @@ from app.schemas import (
     SlotResult,  # For backward-compat: parsing legacy multi-slot query data
 )
 from app.services.executor import execute_query, prepare_context
-from app.services.claude_cli import claude_chat as llm_chat, estimate_cost, MODEL_REGISTRY
+from app.services.llm_provider import llm_chat, estimate_cost, MODEL_REGISTRY
 
 
 def get_available_models() -> list[dict]:

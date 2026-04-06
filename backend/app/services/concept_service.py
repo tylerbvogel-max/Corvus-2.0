@@ -76,6 +76,7 @@ async def link_concept_to_neurons(
     """
     context_text = f"instantiates concept: {concept_label}" if concept_label else None
     created = 0
+    from app.services.edge_tier import delete_weak_edge
     for tid in target_ids:
         src, tgt = min(concept_id, tid), max(concept_id, tid)
         await db.execute(text(
@@ -83,6 +84,8 @@ async def link_concept_to_neurons(
             "VALUES (:src, :tgt, 1, :w, 0, 'instantiates', 'concept_seed', now(), :ctx) "
             "ON CONFLICT (source_id, target_id) DO UPDATE SET edge_type = 'instantiates', weight = GREATEST(neuron_edges.weight, :w), last_adjusted = now(), context = COALESCE(:ctx, neuron_edges.context)"
         ), {"src": src, "tgt": tgt, "w": weight, "ctx": context_text})
+        # Remove from JSONB if previously stored as weak edge
+        await delete_weak_edge(db, src, tgt)
         created += 1
 
     await db.flush()
@@ -121,22 +124,36 @@ async def cofire_concept_neurons(
         return []
 
     # For each concept, strengthen edges between it and all fired neurons
+    # Uses tiered storage: promoted edges in table, weak in JSONB
+    from app.services.edge_tier import (
+        get_weak_edge, upsert_weak_edge, maybe_promote,
+    )
     for cid in concept_ids:
         for fid in fired_neuron_ids:
             if fid == cid:
                 continue
             src, tgt = min(cid, fid), max(cid, fid)
-            # Upsert: create if missing, increment co_fire_count if exists
-            await db.execute(text(
-                "INSERT INTO neuron_edges (source_id, target_id, co_fire_count, weight, last_updated_query, edge_type, source, last_adjusted) "
-                "VALUES (:src, :tgt, 1, 0.05, :qoff, 'instantiates', 'organic', now()) "
-                "ON CONFLICT (source_id, target_id) DO UPDATE SET "
-                "  co_fire_count = neuron_edges.co_fire_count + 1, "
-                "  weight = LEAST(1.0, (neuron_edges.co_fire_count + 1) / 20.0), "
-                "  last_updated_query = :qoff, "
-                "  source = CASE WHEN neuron_edges.source = 'bootstrap' THEN 'organic' ELSE neuron_edges.source END, "
-                "  last_adjusted = now()"
+            # Try UPDATE in promoted table first
+            result = await db.execute(text(
+                "UPDATE neuron_edges "
+                "SET co_fire_count = co_fire_count + 1, "
+                "    weight = LEAST(1.0, (co_fire_count + 1) / 20.0), "
+                "    last_updated_query = :qoff, "
+                "    source = CASE WHEN source = 'bootstrap' THEN 'organic' ELSE source END, "
+                "    last_adjusted = now() "
+                "WHERE source_id = :src AND target_id = :tgt "
+                "RETURNING weight, co_fire_count"
             ), {"src": src, "tgt": tgt, "qoff": query_offset})
+            row = result.one_or_none()
+            if row:
+                continue
+            # Not in table — handle in JSONB
+            entry = await get_weak_edge(db, src, tgt)
+            new_c = (entry.get("c", 0) + 1) if entry else 1
+            new_w = min(1.0, (new_c + 1) / 20.0)
+            data = {"w": new_w, "t": "instantiates", "c": new_c, "s": "organic", "q": query_offset}
+            await upsert_weak_edge(db, src, tgt, data)
+            await maybe_promote(db, src, tgt, new_w, new_c)
 
     return concept_ids
 

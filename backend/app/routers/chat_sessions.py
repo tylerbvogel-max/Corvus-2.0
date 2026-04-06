@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import ChatSession, ChatSessionMessage
-from app.services.claude_cli import claude_chat as llm_chat, estimate_cost
+from app.services.llm_provider import llm_chat, estimate_cost
 
 logger = logging.getLogger(__name__)
 

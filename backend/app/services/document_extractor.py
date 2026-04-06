@@ -24,7 +24,7 @@ from app.models import (
 )
 from app.services.document_parser import DocumentStructure, Section
 from app.services.embedding_service import batch_cosine_similarity, embed_text
-from app.services.claude_cli import claude_chat
+from app.services.llm_provider import llm_chat
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ async def extract_section_knowledge(
         neuron_summary, department, role_key,
     )
 
-    result = await claude_chat(
+    result = await llm_chat(
         system_prompt=system_prompt,
         user_message=user_message,
         max_tokens=4096,

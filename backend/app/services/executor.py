@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.models import Neuron, Query, NeuronEdge
 from app.services.classifier import classify_query
-from app.services.claude_cli import claude_chat as llm_chat, MODEL_REGISTRY
+from app.services.llm_provider import llm_chat, MODEL_REGISTRY
 from app.services.neuron_service import (
     get_neurons_by_filter,
     get_system_state,
@@ -1087,7 +1087,11 @@ async def _load_candidates_by_ids(
 
 
 async def _batch_update_edges(db: AsyncSession, neuron_ids: list[int], query_offset: int):
-    """Batch update co-firing edges for a set of neurons."""
+    """Batch update co-firing edges for a set of neurons (tiered storage).
+
+    Promoted edges (above threshold) stay in neuron_edges table.
+    Weak edges live in JSONB on the neurons table.
+    """
     # Precondition (JPL Power of Ten Rule 5)
     assert len(neuron_ids) >= 2, \
         f"_batch_update_edges requires >= 2 neuron_ids, got {len(neuron_ids)}"
@@ -1098,16 +1102,59 @@ async def _batch_update_edges(db: AsyncSession, neuron_ids: list[int], query_off
              for i, a in enumerate(neuron_ids)
              for b in neuron_ids[i + 1:]]
 
-    # Batch insert new edges (ignore if already exist)
-    for src, tgt in pairs:
-        await db.execute(text(
-            "INSERT INTO neuron_edges (source_id, target_id, co_fire_count, weight, last_updated_query, source, last_adjusted) "
-            "VALUES (:src, :tgt, 0, 0.0, 0, 'organic', now()) "
-            "ON CONFLICT (source_id, target_id) DO NOTHING"
-        ), {"src": src, "tgt": tgt})
+    # Check which pairs already exist in the promoted table
+    existing = await _find_promoted_pairs(db, pairs)
+    promoted_pairs = [p for p in pairs if p in existing]
+    weak_pairs = [p for p in pairs if p not in existing]
 
-    # Batch update all pairs — use RETURNING to get new weights without extra queries
-    updated_weights: list[float] = []
+    # Update promoted edges in table
+    cache_pairs, cache_weights = await _cofire_promoted(
+        db, promoted_pairs, query_offset,
+    )
+
+    # Update weak edges in JSONB, promoting any that cross threshold
+    newly_promoted = await _cofire_weak(db, weak_pairs, query_offset)
+
+    # Update adjacency cache for table-level changes
+    from app.services.adjacency_cache import is_adjacency_loaded, update_adjacency_incremental
+    all_cache_pairs = cache_pairs + [(s, t) for s, t, _w in newly_promoted]
+    all_cache_weights = cache_weights + [w for _s, _t, w in newly_promoted]
+    if is_adjacency_loaded() and all_cache_pairs:
+        update_adjacency_incremental(
+            pairs=all_cache_pairs,
+            weights=all_cache_weights,
+            edge_types=["pyramidal"] * len(all_cache_pairs),
+        )
+
+
+async def _find_promoted_pairs(
+    db: AsyncSession, pairs: list[tuple[int, int]],
+) -> set[tuple[int, int]]:
+    """Check which (src, tgt) pairs exist in the neuron_edges table."""
+    from sqlalchemy import text
+    if not pairs:
+        return set()
+    # Build a VALUES list for batch lookup
+    values = ", ".join(f"({s}, {t})" for s, t in pairs)
+    result = await db.execute(text(
+        f"SELECT source_id, target_id FROM neuron_edges "
+        f"WHERE (source_id, target_id) IN ({values})"
+    ))
+    return {(int(r[0]), int(r[1])) for r in result.all()}
+
+
+async def _cofire_promoted(
+    db: AsyncSession,
+    pairs: list[tuple[int, int]],
+    qoff: int,
+) -> tuple[list[tuple[int, int]], list[float]]:
+    """Increment co-fire count for edges already in the promoted table.
+
+    Returns (pairs, weights) for adjacency cache update.
+    """
+    from sqlalchemy import text
+    cache_pairs: list[tuple[int, int]] = []
+    cache_weights: list[float] = []
     for src, tgt in pairs:
         result = await db.execute(text(
             "UPDATE neuron_edges "
@@ -1118,15 +1165,40 @@ async def _batch_update_edges(db: AsyncSession, neuron_ids: list[int], query_off
             "    last_adjusted = now() "
             "WHERE source_id = :src AND target_id = :tgt "
             "RETURNING weight"
-        ), {"src": src, "tgt": tgt, "qoff": query_offset})
+        ), {"src": src, "tgt": tgt, "qoff": qoff})
         row = result.one_or_none()
-        updated_weights.append(float(row[0]) if row else 0.0)
+        if row:
+            cache_pairs.append((src, tgt))
+            cache_weights.append(float(row[0]))
+    return cache_pairs, cache_weights
 
-    # Incrementally update the adjacency cache
-    from app.services.adjacency_cache import is_adjacency_loaded, update_adjacency_incremental
-    if is_adjacency_loaded() and pairs:
-        update_adjacency_incremental(
-            pairs=list(pairs),
-            weights=updated_weights,
-            edge_types=["pyramidal"] * len(pairs),
-        )
+
+async def _cofire_weak(
+    db: AsyncSession,
+    pairs: list[tuple[int, int]],
+    qoff: int,
+) -> list[tuple[int, int, float]]:
+    """Increment co-fire for weak edges in JSONB, creating new ones as needed.
+
+    Returns list of (src, tgt, weight) for edges that were promoted to table.
+    """
+    from app.services.edge_tier import (
+        get_weak_edge, upsert_weak_edge, maybe_promote,
+    )
+    promoted: list[tuple[int, int, float]] = []
+    for src, tgt in pairs:
+        entry = await get_weak_edge(db, src, tgt)
+        if entry is not None:
+            new_c = entry.get("c", 0) + 1
+            new_w = min(1.0, (new_c + 1) / 20.0)
+        else:
+            new_c = 1
+            new_w = min(1.0, 2 / 20.0)
+        data = {
+            "w": new_w, "t": "pyramidal", "c": new_c,
+            "s": "organic", "q": qoff,
+        }
+        await upsert_weak_edge(db, src, tgt, data)
+        if await maybe_promote(db, src, tgt, new_w, new_c):
+            promoted.append((src, tgt, new_w))
+    return promoted
