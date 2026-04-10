@@ -583,6 +583,9 @@ async def lifespan(app: FastAPI):
     # Load compliance suite registry (frameworks + providers)
     from app.compliance.registry import load_all as load_compliance_registry
     load_compliance_registry()
+    # Register action bus handlers (AIP governance roadmap, pattern #1)
+    from app.services.actions.init_registry import init_actions_registry
+    init_actions_registry()
     await _seed_core_data()
     await _auto_embed_neurons()
     await _seed_engrams()

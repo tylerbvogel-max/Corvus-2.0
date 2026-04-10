@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
 from app.models import (
-    AutopilotProposal, ProposalItem, Neuron, NeuronEdge, NeuronRefinement,
+    AutopilotProposal, ProposalItem, Neuron, NeuronRefinement,
     NeuronSourceLink, EmergentQueue, Query,
 )
 from app.schemas import (
@@ -21,6 +21,8 @@ from app.schemas import (
     GapEvidenceOut, DocumentEvidenceOut,
     ProposalReviewRequest, ProposalApplyRequest, ProposalStatsOut,
 )
+from app.services import action_bus
+from app.middleware.rbac import UserIdentity, resolve_identity
 
 router = APIRouter(prefix="/admin/proposals", tags=["proposals"])
 
@@ -174,129 +176,124 @@ async def review_proposal(
     return _proposal_detail(p)
 
 
-async def _apply_update_item(
-    db: AsyncSession, item: ProposalItem, proposal_id: int, query_id: int | None,
+async def _submit_rescale_child(
+    db: AsyncSession, item: ProposalItem, p: AutopilotProposal,
+    identity: UserIdentity, root_action_id: int,
 ) -> None:
-    """Apply a single update item to the graph."""
-    from app.services.reference_hooks import populate_external_references
-    neuron = await db.get(Neuron, item.target_neuron_id)
-    if not neuron:
-        return
-    field = item.field or ""
-    new_val = item.new_value or ""
-    old_val = item.old_value or ""
-    if field == "content":
-        neuron.content = new_val
-    elif field == "summary":
-        neuron.summary = new_val
-    elif field == "label":
-        neuron.label = new_val
-    elif field == "is_active":
-        neuron.is_active = new_val.lower() in ("true", "1", "yes")
-    else:
-        return
-    if field in ("content", "summary"):
-        populate_external_references(neuron)
-    ref = NeuronRefinement(
-        query_id=query_id, neuron_id=item.target_neuron_id,
-        action="update", field=field, old_value=old_val, new_value=new_val,
-        reason=item.reason or f"Applied from proposal #{proposal_id}",
-    )
-    db.add(ref)
-    await db.flush()
-    item.refinement_id = ref.id
-
-
-async def _apply_create_item(
-    db: AsyncSession, item: ProposalItem, proposal_id: int,
-    query_id: int | None, total_queries: int,
-) -> None:
-    """Apply a single create item to the graph."""
-    from app.services.reference_hooks import populate_external_references
-    assert item.neuron_spec_json is not None
-    spec = json.loads(item.neuron_spec_json)
-    neuron = Neuron(
-        parent_id=spec.get("parent_id"), layer=spec.get("layer", 3),
-        node_type=spec.get("node_type", "knowledge"), label=spec.get("label", ""),
-        content=spec.get("content", ""), summary=spec.get("summary", ""),
-        department=spec.get("department"), role_key=spec.get("role_key"),
-        is_active=True, created_at_query_count=total_queries,
-        source_origin=spec.get("source_origin", "autopilot"),
-        source_type=spec.get("source_type", "operational"),
-        citation=spec.get("citation"),
-        source_url=spec.get("source_url"),
-        authority_level=spec.get("authority_level"),
-        proposal_item_id=item.id,
-    )
-    populate_external_references(neuron)
-    db.add(neuron)
-    await db.flush()
-    item.created_neuron_id = neuron.id
-    ref = NeuronRefinement(
-        query_id=query_id, neuron_id=neuron.id,
-        action="create", field=None, old_value=None,
-        new_value=spec.get("label", ""),
-        reason=item.reason or f"Created from proposal #{proposal_id}",
-    )
-    db.add(ref)
-    await db.flush()
-    item.refinement_id = ref.id
-
-
-async def _apply_rescale_item(
-    db: AsyncSession, item: ProposalItem,
-) -> None:
-    """Apply a single edge weight rescale item (with tier demotion check)."""
+    """Route a 'rescale' ProposalItem through the edge.rescale action."""
     assert item.neuron_spec_json is not None, "rescale item must have spec"
     spec = json.loads(item.neuron_spec_json)
-    source_id = spec["source_id"]
-    target_id = spec["target_id"]
-    new_weight = spec["new_weight"]
+    result = await action_bus.submit(
+        db=db, kind="edge.rescale", actor=identity, actor_type="user",
+        source_proposal_id=p.id, parent_action_id=root_action_id,
+        reason=item.reason,
+        input_data={
+            "source_id": spec["source_id"],
+            "target_id": spec["target_id"],
+            "new_weight": spec["new_weight"],
+        },
+    )
+    if result.state != "applied":
+        raise HTTPException(
+            500, f"edge.rescale child action failed: {result.state} ({result.error})",
+        )
 
-    edge = await db.get(NeuronEdge, (source_id, target_id))
-    if edge:
-        edge.weight = new_weight
-        edge.last_adjusted = datetime.utcnow()
-        # Demote if rescale pushed weight below threshold
-        from app.services.edge_tier import maybe_demote
-        await maybe_demote(db, source_id, target_id, new_weight, edge.co_fire_count)
 
-
-async def _apply_link_item(
-    db: AsyncSession, item: ProposalItem,
+async def _submit_link_child(
+    db: AsyncSession, item: ProposalItem, p: AutopilotProposal,
+    identity: UserIdentity, root_action_id: int,
 ) -> None:
-    """Apply a new edge creation (pattern completion) — tiered storage."""
+    """Route a 'link' ProposalItem through the edge.link action."""
     assert item.neuron_spec_json is not None, "link item must have spec"
     spec = json.loads(item.neuron_spec_json)
-
-    weight = spec.get("initial_weight", 0.15)
-    cofires = 1
-    src = spec["source_id"]
-    tgt = spec["target_id"]
-    etype = spec.get("edge_type", "pyramidal")
-    source = spec.get("source", "integrity_completion")
-
-    from app.services.edge_tier import is_promoted, upsert_weak_edge, delete_weak_edge
-    if is_promoted(weight, cofires):
-        edge = NeuronEdge(
-            source_id=src, target_id=tgt, weight=weight,
-            co_fire_count=cofires, edge_type=etype,
-            source=source, context=spec.get("context", ""),
+    result = await action_bus.submit(
+        db=db, kind="edge.link", actor=identity, actor_type="user",
+        source_proposal_id=p.id, parent_action_id=root_action_id,
+        reason=item.reason,
+        input_data={
+            "source_id": spec["source_id"],
+            "target_id": spec["target_id"],
+            "weight": spec.get("initial_weight", 0.15),
+            "co_fire_count": 1,
+            "edge_type": spec.get("edge_type", "pyramidal"),
+            "source": spec.get("source", "integrity_completion"),
+            "context": spec.get("context", ""),
+        },
+    )
+    if result.state != "applied":
+        raise HTTPException(
+            500, f"edge.link child action failed: {result.state} ({result.error})",
         )
-        db.add(edge)
-        await delete_weak_edge(db, src, tgt)
-    else:
-        data = {"w": weight, "t": etype, "c": cofires, "s": source, "q": 0}
-        await upsert_weak_edge(db, src, tgt, data)
 
 
-async def _apply_merge_item(
-    db: AsyncSession, item: ProposalItem, proposal_id: int, query_id: int | None,
+async def _submit_create_child(
+    db: AsyncSession, item: ProposalItem, p: AutopilotProposal,
+    total_queries: int, identity: UserIdentity, root_action_id: int,
 ) -> None:
-    """Apply a merge action — delegates to update (content merge or deactivation)."""
-    # Merge is implemented as sequential update items (content update + deactivation).
-    # This handler delegates to _apply_update_item for each sub-operation.
-    await _apply_update_item(db, item, proposal_id, query_id)
+    """Route a 'create' ProposalItem through the neuron.create action."""
+    assert item.neuron_spec_json is not None
+    spec = json.loads(item.neuron_spec_json)
+    result = await action_bus.submit(
+        db=db, kind="neuron.create", actor=identity, actor_type="user",
+        source_proposal_id=p.id, parent_action_id=root_action_id,
+        reason=item.reason,
+        input_data={
+            "proposal_id": p.id, "item_id": item.id, "spec": spec,
+            "query_id": p.query_id, "total_queries": total_queries,
+            "reason": item.reason,
+        },
+    )
+    if result.state != "applied":
+        raise HTTPException(
+            500, f"neuron.create child action failed: {result.state} ({result.error})",
+        )
+
+
+async def _submit_refine_child(
+    db: AsyncSession, item: ProposalItem, p: AutopilotProposal,
+    identity: UserIdentity, root_action_id: int,
+) -> None:
+    """Route an 'update' or 'merge' ProposalItem through the neuron.refine action."""
+    result = await action_bus.submit(
+        db=db, kind="neuron.refine", actor=identity, actor_type="user",
+        source_proposal_id=p.id, parent_action_id=root_action_id,
+        reason=item.reason,
+        input_data={
+            "proposal_id": p.id, "item_id": item.id,
+            "target_neuron_id": item.target_neuron_id,
+            "field": item.field or "",
+            "old_value": item.old_value or "",
+            "new_value": item.new_value or "",
+            "query_id": p.query_id,
+            "reason": item.reason,
+        },
+    )
+    if result.state != "applied":
+        raise HTTPException(
+            500, f"neuron.refine child action failed: {result.state} ({result.error})",
+        )
+
+
+async def _dispatch_proposal_items(
+    db: AsyncSession, items: list[ProposalItem], p: AutopilotProposal,
+    total_queries: int, identity: UserIdentity, root_action_id: int,
+) -> bool:
+    """Run every ProposalItem through the right write path. Returns has_edge_changes."""
+    has_edge_changes = False
+    for item in items:
+        if item.action == "create" and item.neuron_spec_json:
+            await _submit_create_child(
+                db, item, p, total_queries, identity, root_action_id,
+            )
+        elif item.action in ("update", "merge") and item.target_neuron_id:
+            await _submit_refine_child(db, item, p, identity, root_action_id)
+        elif item.action == "rescale" and item.neuron_spec_json:
+            await _submit_rescale_child(db, item, p, identity, root_action_id)
+            has_edge_changes = True
+        elif item.action == "link" and item.neuron_spec_json:
+            await _submit_link_child(db, item, p, identity, root_action_id)
+            has_edge_changes = True
+    return has_edge_changes
 
 
 @router.post("/{proposal_id}/apply", response_model=ProposalDetailOut)
@@ -304,8 +301,14 @@ async def apply_proposal(
     proposal_id: int,
     req: ProposalApplyRequest,
     db: AsyncSession = Depends(get_db),
+    identity: UserIdentity = Depends(resolve_identity),
 ):
-    """Apply an approved proposal — writes neurons/updates to the graph."""
+    """Apply an approved proposal — writes neurons/updates to the graph.
+
+    All per-item writes pass through the action bus as child actions of a
+    single `proposal.apply` root action (AIP governance roadmap, pattern #1,
+    Step 2). Edge mutations (rescale/link) are still direct calls — Step 3.
+    """
     p = await db.get(AutopilotProposal, proposal_id)
     if not p:
         raise HTTPException(404, "Proposal not found")
@@ -315,32 +318,33 @@ async def apply_proposal(
     from app.services.neuron_service import get_system_state
     state = await get_system_state(db)
 
-    has_edge_changes = False
-    for item in (p.items or []):
-        if item.action == "update" and item.target_neuron_id:
-            await _apply_update_item(db, item, p.id, p.query_id)
-        elif item.action == "create" and item.neuron_spec_json:
-            await _apply_create_item(db, item, p.id, p.query_id, state.total_queries)
-        elif item.action == "rescale" and item.neuron_spec_json:
-            await _apply_rescale_item(db, item)
-            has_edge_changes = True
-        elif item.action == "link" and item.neuron_spec_json:
-            await _apply_link_item(db, item)
-            has_edge_changes = True
-        elif item.action == "merge" and item.target_neuron_id:
-            await _apply_merge_item(db, item, p.id, p.query_id)
+    items = list(p.items or [])
+    root_result = await action_bus.submit(
+        db=db, kind="proposal.apply", actor=identity, actor_type="user",
+        source_proposal_id=p.id,
+        input_data={
+            "proposal_id": p.id, "item_count": len(items),
+            "applied_by": req.applied_by,
+        },
+    )
+    if root_result.state != "applied":
+        raise HTTPException(
+            500, f"proposal.apply root action failed: {root_result.state} ({root_result.error})",
+        )
+
+    has_edge_changes = await _dispatch_proposal_items(
+        db, items, p, state.total_queries, identity, root_result.action_id,
+    )
 
     p.state = "applied"
     p.applied_at = datetime.utcnow()
     p.applied_by = req.applied_by
 
-    # If applying an integrity proposal, resolve linked findings
     if p.gap_source and p.gap_source.startswith("integrity_"):
         await _resolve_integrity_findings(db, p.id, req.applied_by)
 
     await db.commit()
 
-    # Invalidate adjacency cache if edges were modified
     if has_edge_changes:
         from app.services.adjacency_cache import invalidate_adjacency_cache
         invalidate_adjacency_cache()

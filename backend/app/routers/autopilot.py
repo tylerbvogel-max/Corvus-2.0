@@ -28,6 +28,8 @@ from app.services.executor import execute_query
 from app.services.llm_provider import llm_chat
 from app.services.neuron_service import get_system_state
 from app.services.gap_detector import detect_gap, detect_gaps_scored, GapTarget, ScoredGap
+from app.services import action_bus
+from app.middleware.rbac import UserIdentity
 
 router = APIRouter(prefix="/admin/autopilot", tags=["autopilot"])
 
@@ -686,25 +688,33 @@ async def _self_evaluate(
     raw = result["text"].strip()
     accuracy, completeness, clarity, faithfulness, overall, verdict = _parse_eval_response(raw)
 
-    # Delete old eval scores
-    old_scores = await db.execute(
-        select(EvalScore).where(EvalScore.query_id == query.id)
+    # Route the EvalScore write through the action bus so the autopilot's
+    # eval write is auditable on the same path as user-driven evals.
+    bus_result = await action_bus.submit(
+        db=db,
+        kind="eval.score.set",
+        actor=_AUTOPILOT_ACTOR,
+        actor_type="autopilot",
+        source_query_id=query.id,
+        input_data={
+            "query_id": query.id,
+            "eval_model": model,
+            "verdict": verdict,
+            "scores": [{
+                "answer_label": "A",
+                "answer_mode": "haiku_neuron",
+                "accuracy": accuracy,
+                "completeness": completeness,
+                "clarity": clarity,
+                "faithfulness": faithfulness,
+                "overall": overall,
+            }],
+        },
     )
-    for old in old_scores.scalars():
-        await db.delete(old)
+    assert bus_result.state == "applied", (
+        f"autopilot eval.score.set did not apply: {bus_result.state} ({bus_result.error})"
+    )
 
-    db.add(EvalScore(
-        query_id=query.id,
-        eval_model=model,
-        answer_mode="haiku_neuron",
-        answer_label="A",
-        accuracy=accuracy,
-        completeness=completeness,
-        clarity=clarity,
-        faithfulness=faithfulness,
-        overall=overall,
-        verdict=verdict,
-    ))
     query.eval_text = verdict
     query.eval_model = model
     query.eval_input_tokens = result["input_tokens"]
@@ -979,39 +989,26 @@ async def _refine(
     return reasoning, updates_raw, new_neurons_raw, result["cost_usd"]
 
 
+_AUTOPILOT_ACTOR = UserIdentity(user_id="autopilot", role="admin", source="system")
+
+
 async def _apply_neuron_update(
     db: AsyncSession, query: Query, u: dict
 ) -> bool:
-    """Apply a single neuron update. Returns True if applied."""
-    neuron = await db.get(Neuron, u.get("neuron_id"))
-    if not neuron:
-        return False
-    field = u.get("field", "")
-    new_val = str(u.get("new_value", ""))
-    old_val = str(u.get("old_value", ""))
-    if field == "content":
-        neuron.content = new_val
-    elif field == "summary":
-        neuron.summary = new_val
-    elif field == "label":
-        neuron.label = new_val
-    elif field == "is_active":
-        neuron.is_active = new_val.lower() in ("true", "1", "yes")
-    else:
-        return False
-    if field in ("content", "summary"):
-        from app.services.reference_hooks import populate_external_references
-        populate_external_references(neuron)
-    db.add(NeuronRefinement(
-        query_id=query.id,
-        neuron_id=u["neuron_id"],
-        action="update",
-        field=field,
-        old_value=old_val,
-        new_value=new_val,
-        reason=u.get("reason", "autopilot"),
-    ))
-    return True
+    """Apply a single neuron update via the action bus. Returns True if applied."""
+    result = await action_bus.submit(
+        db=db, kind="neuron.refine", actor=_AUTOPILOT_ACTOR,
+        actor_type="autopilot", source_query_id=query.id,
+        input_data={
+            "target_neuron_id": u.get("neuron_id"),
+            "field": u.get("field", ""),
+            "old_value": str(u.get("old_value", "")),
+            "new_value": str(u.get("new_value", "")),
+            "query_id": query.id,
+            "reason": u.get("reason", "autopilot"),
+        },
+    )
+    return result.state == "applied"
 
 
 async def _resolve_chain_depth_parent(
@@ -1053,33 +1050,31 @@ async def _create_neuron_from_spec(
     db: AsyncSession, query: Query, n: dict,
     parent_id: int | None, total_queries: int
 ) -> None:
-    """Create a single neuron from a spec dict and record the refinement."""
-    from app.services.reference_hooks import populate_external_references
-    neuron = Neuron(
-        parent_id=parent_id,
-        layer=n.get("layer", 3),
-        node_type=n.get("node_type", "knowledge"),
-        label=n.get("label", ""),
-        content=n.get("content", ""),
-        summary=n.get("summary", ""),
-        department=n.get("department"),
-        role_key=n.get("role_key"),
-        is_active=True,
-        created_at_query_count=total_queries,
-        source_origin="autopilot",
+    """Create a single neuron via the action bus."""
+    spec = {
+        "parent_id": parent_id,
+        "layer": n.get("layer", 3),
+        "node_type": n.get("node_type", "knowledge"),
+        "label": n.get("label", ""),
+        "content": n.get("content", ""),
+        "summary": n.get("summary", ""),
+        "department": n.get("department"),
+        "role_key": n.get("role_key"),
+        "source_origin": "autopilot",
+    }
+    result = await action_bus.submit(
+        db=db, kind="neuron.create", actor=_AUTOPILOT_ACTOR,
+        actor_type="autopilot", source_query_id=query.id,
+        input_data={
+            "spec": spec,
+            "query_id": query.id,
+            "total_queries": total_queries,
+            "reason": n.get("reason", "autopilot"),
+        },
     )
-    populate_external_references(neuron)
-    db.add(neuron)
-    await db.flush()
-    db.add(NeuronRefinement(
-        query_id=query.id,
-        neuron_id=neuron.id,
-        action="create",
-        field=None,
-        old_value=None,
-        new_value=n.get("label", ""),
-        reason=n.get("reason", "autopilot"),
-    ))
+    assert result.state == "applied", (
+        f"autopilot neuron.create failed: {result.state} ({result.error})"
+    )
 
 
 async def _apply_all(

@@ -2,6 +2,9 @@
 
 Unified, multi-tenant neuron graph for prompt preparation. Two-stage Haiku pipeline: classify intent → score neurons → assemble context → execute with enriched prompt.
 
+## Active roadmap
+**AIP governance roadmap** — see `ROADMAP-WORKLOG.md` at the repo root for session handoff, current position, and next actions. Full plan at `~/.claude/plans/staged-booping-globe.md`. When the user asks to "work the next AIP roadmap item," start by reading the worklog.
+
 ## Multi-Tenant Architecture
 - **TENANT_ID** env var selects the tenant: `corvus-aero` (aerospace) or `corvus-flow` (plumbing)
 - Domain config lives in `backend/tenants/{tenant_id}/` (tenant.yaml + Python modules)

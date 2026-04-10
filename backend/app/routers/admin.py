@@ -19,6 +19,10 @@ from app.schemas import (
     SeedResponse, ResetResponse, CostReportResponse, CheckpointResponse,
 )
 from app.seed.loader import load_seed
+from app.services import action_bus
+from app.middleware.rbac import UserIdentity
+
+_ADMIN_ACTOR = UserIdentity(user_id="admin-ingest", role="admin", source="system")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -627,47 +631,35 @@ def _validate_proposal_placements(proposals: list[dict]) -> None:
 async def _create_neurons_from_proposals(
     db: AsyncSession, proposals: list[dict], query_count: int,
 ) -> list[int]:
-    from app.services.reference_hooks import populate_external_references
-
-    created_ids = []
+    created_ids: list[int] = []
     for p in proposals:
-        neuron = Neuron(
-            parent_id=p.get("parent_id"),
-            layer=p.get("layer", 3),
-            node_type=p.get("node_type", "system"),
-            label=p.get("label", ""),
-            content=p.get("content", ""),
-            summary=p.get("summary", ""),
-            department=p.get("department"),
-            role_key=p.get("role_key"),
-            is_active=True,
-            created_at_query_count=query_count,
-            source_origin="ingest",
-            source_type=p.get("source_type", "operational"),
-            citation=p.get("citation"),
-            source_url=p.get("source_url"),
-            last_verified=datetime.now(),
+        spec = {
+            "parent_id": p.get("parent_id"),
+            "layer": p.get("layer", 3),
+            "node_type": p.get("node_type", "system"),
+            "label": p.get("label", ""),
+            "content": p.get("content", ""),
+            "summary": p.get("summary", ""),
+            "department": p.get("department"),
+            "role_key": p.get("role_key"),
+            "source_origin": "ingest",
+            "source_type": p.get("source_type", "operational"),
+            "citation": p.get("citation"),
+            "source_url": p.get("source_url"),
+        }
+        result = await action_bus.submit(
+            db=db, kind="neuron.create", actor=_ADMIN_ACTOR,
+            actor_type="user",
+            input_data={
+                "spec": spec,
+                "total_queries": query_count,
+                "reason": f"Ingested from {p.get('citation', 'unknown source')}",
+            },
         )
-        if p.get("effective_date"):
-            try:
-                from datetime import date
-                neuron.effective_date = date.fromisoformat(p["effective_date"])
-            except (ValueError, TypeError):
-                pass
-
-        populate_external_references(neuron)
-        db.add(neuron)
-        await db.flush()
-        created_ids.append(neuron.id)
-
-        db.add(NeuronRefinement(
-            neuron_id=neuron.id,
-            action="create",
-            field=None,
-            old_value=None,
-            new_value=p.get("label", ""),
-            reason=f"Ingested from {p.get('citation', 'unknown source')}",
-        ))
+        assert result.state == "applied", (
+            f"neuron.create failed during admin ingest: {result.error}"
+        )
+        created_ids.append(result.payload["neuron_id"])
     return created_ids
 
 
@@ -693,22 +685,30 @@ async def _create_referencing_edges(
     referencing_ids = json.loads(entry.detected_in_neuron_ids or "[]")
     for ref_id in referencing_ids:
         for new_id in created_ids:
-            if ref_id != new_id:
-                existing = await db.execute(
-                    select(NeuronEdge).where(
-                        NeuronEdge.source_id == ref_id,
-                        NeuronEdge.target_id == new_id,
-                    )
+            if ref_id == new_id:
+                continue
+            existing = await db.execute(
+                select(NeuronEdge).where(
+                    NeuronEdge.source_id == ref_id,
+                    NeuronEdge.target_id == new_id,
                 )
-                if not existing.scalar_one_or_none():
-                    db.add(NeuronEdge(
-                        source_id=ref_id,
-                        target_id=new_id,
-                        co_fire_count=1,
-                        weight=0.3,
-                        last_updated_query=query_count,
-                    ))
-                    edges_created += 1
+            )
+            if existing.scalar_one_or_none():
+                continue
+            result = await action_bus.submit(
+                db=db, kind="edge.link", actor=_ADMIN_ACTOR,
+                actor_type="user",
+                input_data={
+                    "source_id": ref_id,
+                    "target_id": new_id,
+                    "weight": 0.3,
+                    "co_fire_count": 1,
+                    "source": "emergent_queue",
+                    "last_updated_query": query_count,
+                },
+            )
+            if result.state == "applied":
+                edges_created += 1
     return edges_created
 
 

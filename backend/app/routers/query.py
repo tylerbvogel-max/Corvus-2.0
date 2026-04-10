@@ -20,6 +20,8 @@ from app.schemas import (
 )
 from app.services.executor import execute_query, prepare_context
 from app.services.llm_provider import llm_chat, estimate_cost, MODEL_REGISTRY
+from app.services import action_bus
+from app.middleware.rbac import UserIdentity, resolve_identity
 
 
 def get_available_models() -> list[dict]:
@@ -623,47 +625,55 @@ async def _save_eval_scores(
     db: AsyncSession, query_id: int, model: str,
     parsed_scores: list[dict], verdict_text: str,
     answer_map: list[tuple[str, SlotResult]],
+    actor: UserIdentity,
 ) -> list[EvalScoreOut]:
-    old_scores = await db.execute(
-        select(EvalScore).where(EvalScore.query_id == query_id)
-    )
-    for old in old_scores.scalars():
-        await db.delete(old)
-
+    """Submit eval.score.set through the action bus and return view rows."""
     answer_lookup = {letter: slot for letter, slot in answer_map}
-    score_rows: list[EvalScoreOut] = []
+    bus_rows: list[dict] = []
+    view_rows: list[EvalScoreOut] = []
     for ps in parsed_scores:
         letter = ps.get("answer", "?")
         slot_match = answer_lookup.get(letter)
-        row = EvalScore(
-            query_id=query_id,
-            eval_model=model,
-            answer_mode=slot_match.mode if slot_match else letter,
-            answer_label=letter,
-            accuracy=_clamp(ps.get("accuracy", 3)),
-            completeness=_clamp(ps.get("completeness", 3)),
-            clarity=_clamp(ps.get("clarity", 3)),
-            faithfulness=_clamp(ps.get("faithfulness", 3)),
-            overall=_clamp(ps.get("overall", 3)),
-            verdict=verdict_text,
+        mode = slot_match.mode if slot_match else letter
+        row_dict = {
+            "answer_label": letter,
+            "answer_mode": mode,
+            "accuracy": _clamp(ps.get("accuracy", 3)),
+            "completeness": _clamp(ps.get("completeness", 3)),
+            "clarity": _clamp(ps.get("clarity", 3)),
+            "faithfulness": _clamp(ps.get("faithfulness", 3)),
+            "overall": _clamp(ps.get("overall", 3)),
+        }
+        bus_rows.append(row_dict)
+        view_rows.append(EvalScoreOut(**row_dict))
+
+    result = await action_bus.submit(
+        db=db,
+        kind="eval.score.set",
+        actor=actor,
+        actor_type="user",
+        source_query_id=query_id,
+        input_data={
+            "query_id": query_id,
+            "eval_model": model,
+            "verdict": verdict_text,
+            "scores": bus_rows,
+        },
+    )
+    if result.state != "applied":
+        raise HTTPException(
+            status_code=500,
+            detail=f"eval.score.set action did not apply: {result.state} ({result.error})",
         )
-        db.add(row)
-        score_rows.append(EvalScoreOut(
-            answer_label=letter,
-            answer_mode=slot_match.mode if slot_match else letter,
-            accuracy=row.accuracy,
-            completeness=row.completeness,
-            clarity=row.clarity,
-            faithfulness=row.faithfulness,
-            overall=row.overall,
-        ))
-    assert len(score_rows) == len(parsed_scores), "all parsed scores must produce output rows"
-    return score_rows
+    assert len(view_rows) == len(parsed_scores), "all parsed scores must produce output rows"
+    return view_rows
 
 
 @router.post("/query/{query_id}/evaluate", response_model=EvalResponse)
 async def evaluate_query(
-    query_id: int, req: EvalRequest, db: AsyncSession = Depends(get_db)
+    query_id: int, req: EvalRequest,
+    db: AsyncSession = Depends(get_db),
+    identity: UserIdentity = Depends(resolve_identity),
 ):
     """Run domain-informed LLM evaluation comparing multiple response slots for a query.
 
@@ -699,7 +709,7 @@ async def evaluate_query(
 
     parsed_scores, verdict_text, winner = _parse_eval_response(raw_text)
     score_rows = await _save_eval_scores(
-        db, query_id, req.model, parsed_scores, verdict_text, answer_map,
+        db, query_id, req.model, parsed_scores, verdict_text, answer_map, identity,
     )
 
     query.eval_text = verdict_text
@@ -1062,7 +1072,9 @@ async def refine_query(
 
 @router.post("/query/{query_id}/refine/apply", response_model=ApplyRefineResponse)
 async def apply_refinements(
-    query_id: int, req: ApplyRefineRequest, db: AsyncSession = Depends(get_db)
+    query_id: int, req: ApplyRefineRequest,
+    db: AsyncSession = Depends(get_db),
+    identity: UserIdentity = Depends(resolve_identity),
 ):
     """Apply selected neuron update and creation suggestions from a prior refine call."""
     query = await db.get(Query, query_id)
@@ -1080,33 +1092,20 @@ async def apply_refinements(
         if idx < 0 or idx >= len(updates_list):
             continue
         u = updates_list[idx]
-        neuron = await db.get(Neuron, u["neuron_id"])
-        if not neuron:
-            continue
-        field = u["field"]
-        old_val = u.get("old_value", "")
-        new_val = u["new_value"]
-        if field == "content":
-            neuron.content = new_val
-        elif field == "summary":
-            neuron.summary = new_val
-        elif field == "label":
-            neuron.label = new_val
-        elif field == "is_active":
-            neuron.is_active = new_val.lower() in ("true", "1", "yes")
-        if field in ("content", "summary"):
-            from app.services.reference_hooks import populate_external_references
-            populate_external_references(neuron)
-        db.add(NeuronRefinement(
-            query_id=query_id,
-            neuron_id=u["neuron_id"],
-            action="update",
-            field=field,
-            old_value=str(old_val),
-            new_value=str(new_val),
-            reason=u.get("reason", ""),
-        ))
-        updated_count += 1
+        result = await action_bus.submit(
+            db=db, kind="neuron.refine", actor=identity, actor_type="user",
+            source_query_id=query_id,
+            input_data={
+                "target_neuron_id": u["neuron_id"],
+                "field": u["field"],
+                "old_value": str(u.get("old_value", "")),
+                "new_value": str(u["new_value"]),
+                "query_id": query_id,
+                "reason": u.get("reason", ""),
+            },
+        )
+        if result.state == "applied":
+            updated_count += 1
 
     created_count = 0
     state = await get_system_state(db)
@@ -1114,33 +1113,28 @@ async def apply_refinements(
         if idx < 0 or idx >= len(new_neurons_list):
             continue
         n = new_neurons_list[idx]
-        neuron = Neuron(
-            parent_id=n.get("parent_id"),
-            layer=n.get("layer", 3),
-            node_type=n.get("node_type", "knowledge"),
-            label=n.get("label", ""),
-            content=n.get("content", ""),
-            summary=n.get("summary", ""),
-            department=n.get("department"),
-            role_key=n.get("role_key"),
-            is_active=True,
-            created_at_query_count=state.total_queries,
-            source_origin="manual",
+        result = await action_bus.submit(
+            db=db, kind="neuron.create", actor=identity, actor_type="user",
+            source_query_id=query_id,
+            input_data={
+                "spec": {
+                    "parent_id": n.get("parent_id"),
+                    "layer": n.get("layer", 3),
+                    "node_type": n.get("node_type", "knowledge"),
+                    "label": n.get("label", ""),
+                    "content": n.get("content", ""),
+                    "summary": n.get("summary", ""),
+                    "department": n.get("department"),
+                    "role_key": n.get("role_key"),
+                    "source_origin": "manual",
+                },
+                "query_id": query_id,
+                "total_queries": state.total_queries,
+                "reason": n.get("reason", ""),
+            },
         )
-        from app.services.reference_hooks import populate_external_references
-        populate_external_references(neuron)
-        db.add(neuron)
-        await db.flush()  # get neuron.id
-        db.add(NeuronRefinement(
-            query_id=query_id,
-            neuron_id=neuron.id,
-            action="create",
-            field=None,
-            old_value=None,
-            new_value=n.get("label", ""),
-            reason=n.get("reason", ""),
-        ))
-        created_count += 1
+        if result.state == "applied":
+            created_count += 1
 
     await db.commit()
     return ApplyRefineResponse(updated=updated_count, created=created_count)

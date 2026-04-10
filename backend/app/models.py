@@ -734,3 +734,61 @@ class IntegrityFinding(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     scan: Mapped["IntegrityScan"] = relationship("IntegrityScan", back_populates="findings")
+
+
+class Action(Base):
+    """Universal write primitive — every state mutation passes through one of these.
+
+    Generalizes the AutopilotProposal -> apply state machine into a typed,
+    validated, audited record. Most actions auto-apply (requires_approval=False);
+    sensitive ones (e.g., admin operations, classification changes) can require
+    review. Actions form a parent/child tree so an autopilot proposal that emits
+    multiple writes is grouped under a single root.
+    """
+
+    __tablename__ = "actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Identity
+    kind: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    actor_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # actor_type: "user" | "autopilot" | "system" | "external_agent"
+    actor_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Payload
+    input_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Provenance — what triggered this action
+    source_query_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("queries.id"), nullable=True, index=True,
+    )
+    source_proposal_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("autopilot_proposals.id"), nullable=True, index=True,
+    )
+    parent_action_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("actions.id"), nullable=True, index=True,
+    )
+
+    # Approval state machine — pending -> applied/rejected/failed
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending",
+        server_default="pending", index=True,
+    )
+    reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reviewed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Outcome
+    applied_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Idempotency — client-supplied unique key prevents double-execution on retry
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, unique=True,
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())

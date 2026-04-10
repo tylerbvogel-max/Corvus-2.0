@@ -1,0 +1,71 @@
+"""Register all action handlers at app startup.
+
+Called once from app.main:lifespan. Adding a new action kind = import its
+module here and call register_action.
+"""
+
+from app.services.action_bus import register_action
+from app.services.actions.eval_score_set import (
+    EvalScoreSetInput,
+    handle_eval_score_set,
+)
+from app.services.actions.neuron_create import (
+    NeuronCreateInput,
+    handle_neuron_create,
+)
+from app.services.actions.neuron_refine import (
+    NeuronRefineInput,
+    handle_neuron_refine,
+)
+from app.services.actions.proposal_apply import (
+    ProposalApplyInput,
+    handle_proposal_apply,
+)
+from app.services.actions.edge_rescale import (
+    EdgeRescaleInput,
+    handle_edge_rescale,
+)
+from app.services.actions.edge_link import (
+    EdgeLinkInput,
+    handle_edge_link,
+)
+
+
+def init_actions_registry() -> None:
+    """Register every action kind known to Corvus."""
+    register_action(
+        kind="eval.score.set",
+        schema=EvalScoreSetInput,
+        handler=handle_eval_score_set,
+        requires_approval=False,
+    )
+    register_action(
+        kind="proposal.apply",
+        schema=ProposalApplyInput,
+        handler=handle_proposal_apply,
+        requires_approval=False,
+    )
+    register_action(
+        kind="neuron.create",
+        schema=NeuronCreateInput,
+        handler=handle_neuron_create,
+        requires_approval=False,
+    )
+    register_action(
+        kind="neuron.refine",
+        schema=NeuronRefineInput,
+        handler=handle_neuron_refine,
+        requires_approval=False,
+    )
+    register_action(
+        kind="edge.rescale",
+        schema=EdgeRescaleInput,
+        handler=handle_edge_rescale,
+        requires_approval=False,
+    )
+    register_action(
+        kind="edge.link",
+        schema=EdgeLinkInput,
+        handler=handle_edge_link,
+        requires_approval=False,
+    )

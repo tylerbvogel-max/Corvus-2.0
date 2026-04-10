@@ -115,6 +115,40 @@ class FileAnalyzer:
                     )
 
 
+import re
+
+# AIP-1: Direct ORM writes for governed model types must go through the action
+# bus (backend/app/services/actions/). Exempt: seed loaders, concept service,
+# edge tier promotion (internal infrastructure), and the action handlers
+# themselves.
+_DIRECT_WRITE_RE = re.compile(
+    r'db\.add\(\s*(Neuron|NeuronRefinement|NeuronEdge|EvalScore)\s*\('
+)
+_DIRECT_WRITE_EXEMPT_FRAGMENTS = (
+    "services/actions/",
+    "seed/loader.py",
+    "services/concept_service.py",
+    "services/edge_tier.py",
+)
+
+
+def _check_direct_writes(filepath: str, source: str) -> list[str]:
+    """Warn if governed model types are written outside action handlers."""
+    norm = filepath.replace("\\", "/")
+    for frag in _DIRECT_WRITE_EXEMPT_FRAGMENTS:
+        if frag in norm:
+            return []
+    warnings: list[str] = []
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        m = _DIRECT_WRITE_RE.search(line)
+        if m:
+            warnings.append(
+                f"  {filepath}:{lineno} AIP-1 direct ORM write: "
+                f"db.add({m.group(1)}(...)) — use action bus instead"
+            )
+    return warnings
+
+
 def lint_file(filepath: str) -> tuple[list[str], list[str]]:
     """Returns (strict_violations, warnings) for a single file."""
     try:
@@ -125,6 +159,8 @@ def lint_file(filepath: str) -> tuple[list[str], list[str]]:
     try:
         analyzer = FileAnalyzer(filepath, source)
         analyzer.analyze()
+        dw_warnings = _check_direct_writes(filepath, source)
+        analyzer.warnings.extend(dw_warnings)
         return analyzer.strict_violations, analyzer.warnings
     except SyntaxError:
         return [], []

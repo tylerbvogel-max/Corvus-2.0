@@ -14,6 +14,10 @@ from app.models import Neuron, NeuronEdge, NeuronRefinement, ObservationQueue
 from app.services.llm_provider import llm_chat
 from app.schemas import ObservationEvalRequest, ObservationBatchEvalRequest, ObservationApplyRequest
 from app.services.reference_hooks import populate_external_references
+from app.services import action_bus
+from app.middleware.rbac import UserIdentity, resolve_identity
+
+_SYSTEM_ACTOR = UserIdentity(user_id="corvus-system", role="admin", source="system")
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -233,32 +237,39 @@ async def approve_observation(obs_id: int, db: AsyncSession = Depends(get_db)):
                 label = obs.text[:idx].strip()
                 break
 
-    neuron = Neuron(
-        parent_id=parent_id,
-        layer=obs.proposed_layer,
-        node_type=node_type,
-        label=label,
-        content=obs.text,
-        summary=obs.text[:300] if len(obs.text) > 300 else obs.text,
-        department=obs.proposed_department,
-        role_key=obs.proposed_role_key,
-        source_type="operational",
-        source_origin="corvus",
-        is_active=True,
+    result = await action_bus.submit(
+        db=db, kind="neuron.create", actor=_SYSTEM_ACTOR,
+        actor_type="system",
+        input_data={
+            "spec": {
+                "parent_id": parent_id,
+                "layer": obs.proposed_layer,
+                "node_type": node_type,
+                "label": label,
+                "content": obs.text,
+                "summary": obs.text[:300] if len(obs.text) > 300 else obs.text,
+                "department": obs.proposed_department,
+                "role_key": obs.proposed_role_key,
+                "source_type": "operational",
+                "source_origin": "corvus",
+            },
+            "reason": f"Corvus observation #{obs.id} approved",
+        },
     )
-    db.add(neuron)
-    await db.flush()
+    assert result.state == "applied", f"neuron.create failed: {result.error}"
 
+    neuron_id = result.payload["neuron_id"]
     obs.status = "approved"
-    obs.created_neuron_id = neuron.id
+    obs.created_neuron_id = neuron_id
     await db.commit()
 
+    neuron = await db.get(Neuron, neuron_id)
     return {
         "observation_id": obs.id,
-        "neuron_id": neuron.id,
-        "label": neuron.label,
-        "department": neuron.department,
-        "layer": neuron.layer,
+        "neuron_id": neuron_id,
+        "label": neuron.label if neuron else label,
+        "department": neuron.department if neuron else obs.proposed_department,
+        "layer": neuron.layer if neuron else obs.proposed_layer,
     }
 
 
@@ -596,29 +607,19 @@ async def _apply_selected_updates(
         if idx < 0 or idx >= len(updates_list):
             continue
         u = updates_list[idx]
-        neuron = await db.get(Neuron, u["neuron_id"])
-        if not neuron:
-            continue
-        field = u["field"]
-        new_val = u["new_value"]
-        old_val = u.get("old_value", "")
-        if field == "content":
-            neuron.content = new_val
-        elif field == "summary":
-            neuron.summary = new_val
-        elif field == "label":
-            neuron.label = new_val
-        if field in ("content", "summary"):
-            populate_external_references(neuron)
-        db.add(NeuronRefinement(
-            neuron_id=u["neuron_id"],
-            action="update",
-            field=field,
-            old_value=str(old_val),
-            new_value=str(new_val),
-            reason=u.get("reason", f"Corvus observation #{obs_id}"),
-        ))
-        updated_count += 1
+        result = await action_bus.submit(
+            db=db, kind="neuron.refine", actor=_SYSTEM_ACTOR,
+            actor_type="system",
+            input_data={
+                "target_neuron_id": u["neuron_id"],
+                "field": u["field"],
+                "old_value": str(u.get("old_value", "")),
+                "new_value": str(u["new_value"]),
+                "reason": u.get("reason", f"Corvus observation #{obs_id}"),
+            },
+        )
+        if result.state == "applied":
+            updated_count += 1
     return updated_count
 
 
@@ -627,36 +628,32 @@ async def _apply_selected_new_neurons(
     obs: ObservationQueue,
 ) -> tuple[int, list[int]]:
     created_count = 0
-    created_neuron_ids = []
+    created_neuron_ids: list[int] = []
     for idx in indices:
         if idx < 0 or idx >= len(new_neurons_list):
             continue
         n = new_neurons_list[idx]
-        neuron = Neuron(
-            parent_id=n.get("parent_id"),
-            layer=n.get("layer", 3),
-            node_type=n.get("node_type", "system"),
-            label=n.get("label", ""),
-            content=n.get("content", ""),
-            summary=n.get("summary", ""),
-            department=n.get("department") or obs.proposed_department,
-            role_key=n.get("role_key") or obs.proposed_role_key,
-            is_active=True,
-            source_origin="corvus",
+        result = await action_bus.submit(
+            db=db, kind="neuron.create", actor=_SYSTEM_ACTOR,
+            actor_type="system",
+            input_data={
+                "spec": {
+                    "parent_id": n.get("parent_id"),
+                    "layer": n.get("layer", 3),
+                    "node_type": n.get("node_type", "system"),
+                    "label": n.get("label", ""),
+                    "content": n.get("content", ""),
+                    "summary": n.get("summary", ""),
+                    "department": n.get("department") or obs.proposed_department,
+                    "role_key": n.get("role_key") or obs.proposed_role_key,
+                    "source_origin": "corvus",
+                },
+                "reason": n.get("reason", f"Corvus observation #{obs.id}"),
+            },
         )
-        populate_external_references(neuron)
-        db.add(neuron)
-        await db.flush()
-        created_neuron_ids.append(neuron.id)
-        db.add(NeuronRefinement(
-            neuron_id=neuron.id,
-            action="create",
-            field=None,
-            old_value=None,
-            new_value=n.get("label", ""),
-            reason=n.get("reason", f"Corvus observation #{obs.id}"),
-        ))
-        created_count += 1
+        if result.state == "applied":
+            created_neuron_ids.append(result.payload["neuron_id"])
+            created_count += 1
     return created_count, created_neuron_ids
 
 
@@ -667,17 +664,19 @@ async def _apply_merge(
     if not target:
         return 0
     old_content = target.content or ""
-    target.content = old_content + "\n\n" + merge_content_delta
-    populate_external_references(target)
-    db.add(NeuronRefinement(
-        neuron_id=merge_target_id,
-        action="update",
-        field="content",
-        old_value=old_content[:500],
-        new_value=target.content[:500],
-        reason=f"Merged from Corvus observation #{obs_id}",
-    ))
-    return 1
+    new_content = old_content + "\n\n" + merge_content_delta
+    result = await action_bus.submit(
+        db=db, kind="neuron.refine", actor=_SYSTEM_ACTOR,
+        actor_type="system",
+        input_data={
+            "target_neuron_id": merge_target_id,
+            "field": "content",
+            "old_value": old_content,
+            "new_value": new_content,
+            "reason": f"Merged from Corvus observation #{obs_id}",
+        },
+    )
+    return 1 if result.state == "applied" else 0
 
 
 async def _strengthen_observation_entity_edges(
